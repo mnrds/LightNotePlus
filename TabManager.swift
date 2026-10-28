@@ -88,25 +88,34 @@ final class TabManager: ObservableObject {
                 return false
             }
         } else {
-            let savePanel = NSSavePanel()
-            savePanel.allowedContentTypes = [UTType.text, UTType.sourceCode]
-            savePanel.title = "Save File"
-            savePanel.nameFieldLabel = "File name:"
+            return await saveTabAs(at: index)
+        }
+    }
 
-            let response = await savePanel.begin()
+    func saveCurrentTabAs() async -> Bool {
+        await saveTabAs(at: selectedTabIndex)
+    }
 
-            if response == .OK, let url = savePanel.url {
-                do {
-                    try tab.content.write(to: url, atomically: true, encoding: .utf8)
-                    guard tabs.indices.contains(index) else { return false }
-                    tabs[index].fileURL = url
-                    tabs[index].isEdited = false
-                    return true
-                } catch {
-                    print("Error saving file: \(error)")
-                    return false
-                }
-            }
+    private func saveTabAs(at index: Int) async -> Bool {
+        guard tabs.indices.contains(index) else { return false }
+        let tab = tabs[index]
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [UTType.text, UTType.sourceCode]
+        savePanel.title = "Save File"
+        savePanel.nameFieldLabel = "File name:"
+
+        let response = await savePanel.begin()
+        guard response == .OK, let url = savePanel.url else { return false }
+
+        do {
+            try tab.content.write(to: url, atomically: true, encoding: .utf8)
+            guard tabs.indices.contains(index) else { return false }
+            tabs[index].fileURL = url
+            tabs[index].isEdited = false
+            return true
+        } catch {
+            print("Error saving file: \(error)")
             return false
         }
     }

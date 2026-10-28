@@ -20,5 +20,25 @@ struct SimpleNotepadApp: App {
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open…") {
+                    Task { await tabManager.openFile() }
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    Task { await tabManager.saveCurrentTab() }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("Save As…") {
+                    Task { await tabManager.saveCurrentTabAs() }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+        }
     }
 }
