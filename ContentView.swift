@@ -175,8 +175,20 @@ struct EditorView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
 
-    @State private var text: String = ""
-    @State private var lineNumbers: [Int] = []
+    private var currentContent: String {
+        tabManager.getCurrentTab()?.content ?? ""
+    }
+
+    private var textBinding: Binding<String> {
+        Binding(
+            get: { currentContent },
+            set: { tabManager.updateCurrentTabContent($0) }
+        )
+    }
+
+    private var lineNumbers: [Int] {
+        Array(1...currentContent.components(separatedBy: .newlines).count)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -195,36 +207,15 @@ struct EditorView: View {
             .frame(width: 50)
 
             ScrollView {
-                TextEditor(text: $text)
+                TextEditor(text: textBinding)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(themeManager.colors.editorText)
                     .scrollContentBackground(.hidden)
                     .background(themeManager.colors.editorBackground)
                     .environment(\.colorScheme, themeManager.currentTheme == .light ? .light : .dark)
                     .padding(.leading, 8)
-                    .onChange(of: text) { newValue in
-                        updateLineNumbers()
-                        tabManager.updateCurrentTabContent(newValue)
-                    }
-                    .onAppear {
-                        if let currentTab = tabManager.getCurrentTab() {
-                            text = currentTab.content
-                            updateLineNumbers()
-                        }
-                    }
-                    .onChange(of: tabManager.selectedTabIndex) { _ in
-                        if let currentTab = tabManager.getCurrentTab() {
-                            text = currentTab.content
-                            updateLineNumbers()
-                        }
-                    }
             }
         }
         .background(themeManager.colors.editorBackground)
-    }
-
-    private func updateLineNumbers() {
-        let lines = text.components(separatedBy: .newlines)
-        lineNumbers = Array(1...lines.count)
     }
 }
