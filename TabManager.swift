@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 final class TabManager: ObservableObject {
     @Published var tabs: [Tab] = []
     @Published var selectedTabIndex: Int = 0
+    @Published var pendingCloseTabIndex: Int?
 
     init() {
         newTab()
@@ -24,7 +25,23 @@ final class TabManager: ObservableObject {
     }
 
     func closeTab(at index: Int) {
-        guard index < tabs.count else { return }
+        guard tabs.indices.contains(index) else { return }
+        guard !tabs[index].isEdited else {
+            pendingCloseTabIndex = index
+            return
+        }
+
+        removeTab(at: index)
+    }
+
+    func discardChangesAndCloseTab(at index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        tabs[index].isEdited = false
+        removeTab(at: index)
+    }
+
+    private func removeTab(at index: Int) {
+        pendingCloseTabIndex = nil
 
         if tabs.count == 1 {
             tabs[0].content = ""
@@ -54,12 +71,17 @@ final class TabManager: ObservableObject {
     }
 
     func saveCurrentTab() async -> Bool {
-        guard let currentTab = getCurrentTab() else { return false }
+        await saveTab(at: selectedTabIndex)
+    }
 
-        if let fileURL = currentTab.fileURL {
+    func saveTab(at index: Int) async -> Bool {
+        guard tabs.indices.contains(index) else { return false }
+        let tab = tabs[index]
+
+        if let fileURL = tab.fileURL {
             do {
-                try currentTab.content.write(to: fileURL, atomically: true, encoding: .utf8)
-                tabs[selectedTabIndex].isEdited = false
+                try tab.content.write(to: fileURL, atomically: true, encoding: .utf8)
+                tabs[index].isEdited = false
                 return true
             } catch {
                 print("Error saving file: \(error)")
@@ -75,9 +97,10 @@ final class TabManager: ObservableObject {
 
             if response == .OK, let url = savePanel.url {
                 do {
-                    try currentTab.content.write(to: url, atomically: true, encoding: .utf8)
-                    tabs[selectedTabIndex].fileURL = url
-                    tabs[selectedTabIndex].isEdited = false
+                    try tab.content.write(to: url, atomically: true, encoding: .utf8)
+                    guard tabs.indices.contains(index) else { return false }
+                    tabs[index].fileURL = url
+                    tabs[index].isEdited = false
                     return true
                 } catch {
                     print("Error saving file: \(error)")

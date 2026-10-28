@@ -33,6 +33,36 @@ struct ContentView: View {
         }
         .frame(minWidth: 400, minHeight: 300)
         .background(themeManager.colors.background)
+        .alert(
+            "Save changes before closing?",
+            isPresented: Binding(
+                get: { tabManager.pendingCloseTabIndex != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        tabManager.pendingCloseTabIndex = nil
+                    }
+                }
+            )
+        ) {
+            if let index = tabManager.pendingCloseTabIndex {
+                Button("Save") {
+                    Task {
+                        if await tabManager.saveTab(at: index) {
+                            tabManager.closeTab(at: index)
+                        }
+                    }
+                }
+                Button("Don't Save", role: .destructive) {
+                    tabManager.discardChangesAndCloseTab(at: index)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let index = tabManager.pendingCloseTabIndex,
+               tabManager.tabs.indices.contains(index) {
+                Text("Do you want to save changes to \(tabManager.tabs[index].displayName) before closing?")
+            }
+        }
     }
 }
 
@@ -50,7 +80,7 @@ struct ToolbarView: View {
             .help("Open")
 
             Button(action: { Task { await tabManager.saveCurrentTab() } }) {
-                Image(systemName: "arrow.down.doc")
+                Image(systemName: "square.and.arrow.down")
                     .foregroundColor(themeManager.colors.text)
             }
             .buttonStyle(.plain)
