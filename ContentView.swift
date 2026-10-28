@@ -12,10 +12,12 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
+    @State private var isTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +35,22 @@ struct ContentView: View {
         }
         .frame(minWidth: 400, minHeight: 300)
         .background(themeManager.colors.background)
+        .overlay {
+            if isTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(
+                        themeManager.colors.tabSelected,
+                        style: StrokeStyle(lineWidth: 3, dash: [8])
+                    )
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(
+            of: [UTType.fileURL],
+            isTargeted: $isTargeted,
+            perform: handleFileDrop
+        )
         .alert(
             "Save changes before closing?",
             isPresented: Binding(
@@ -63,6 +81,37 @@ struct ContentView: View {
                 Text("Do you want to save changes to \(tabManager.tabs[index].displayName) before closing?")
             }
         }
+    }
+
+    private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileURLType = UTType.fileURL.identifier
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(fileURLType)
+        }
+        guard !fileProviders.isEmpty else { return false }
+
+        for provider in fileProviders {
+            provider.loadItem(forTypeIdentifier: fileURLType, options: nil) { item, error in
+                if let error {
+                    print("Error loading dropped file: \(error)")
+                    return
+                }
+
+                let url = (item as? URL) ?? (item as? Data).flatMap {
+                    URL(dataRepresentation: $0, relativeTo: nil)
+                }
+                guard let url else {
+                    print("Error loading dropped file: invalid file URL")
+                    return
+                }
+
+                Task { @MainActor in
+                    await tabManager.openFile(at: url)
+                }
+            }
+        }
+
+        return true
     }
 }
 
@@ -175,6 +224,7 @@ struct EditorView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
     @EnvironmentObject var findState: FindState
+    @EnvironmentObject var zoomState: ZoomState
 
     private var currentContent: String {
         tabManager.getCurrentTab()?.content ?? ""
@@ -191,32 +241,60 @@ struct EditorView: View {
         Array(1...currentContent.components(separatedBy: .newlines).count)
     }
 
+    private var wordCount: Int {
+        currentContent.split(whereSeparator: \.isWhitespace).count
+    }
+
+    private var characterCount: Int {
+        currentContent.count
+    }
+
+    private var textEditor: some View {
+        TextEditor(text: textBinding)
+            .font(.system(size: zoomState.fontSize, design: .monospaced))
+            .foregroundColor(themeManager.colors.editorText)
+            .scrollContentBackground(.hidden)
+            .background(themeManager.colors.editorBackground)
+            .environment(\.colorScheme, themeManager.currentTheme == .light ? .light : .dark)
+            .padding(.leading, 8)
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .trailing, spacing: 0) {
-                    ForEach(lineNumbers, id: \.self) { number in
-                        Text("\(number)")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(themeManager.colors.lineNumbers)
-                            .frame(width: 40, alignment: .trailing)
-                            .padding(.trailing, 8)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        ForEach(lineNumbers, id: \.self) { number in
+                            Text("\(number)")
+                                .font(.system(size: zoomState.fontSize, design: .monospaced))
+                                .foregroundColor(themeManager.colors.lineNumbers)
+                                .frame(width: 40, alignment: .trailing)
+                                .padding(.trailing, 8)
+                        }
+                    }
+                }
+                .background(themeManager.colors.editorBackground)
+                .frame(width: 50)
+
+                ScrollView {
+                    if #available(macOS 26.0, *) {
+                        textEditor.findNavigator(isPresented: $findState.isPresented)
+                    } else {
+                        textEditor
                     }
                 }
             }
-            .background(themeManager.colors.editorBackground)
-            .frame(width: 50)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            ScrollView {
-                TextEditor(text: textBinding)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(themeManager.colors.editorText)
-                    .scrollContentBackground(.hidden)
-                    .background(themeManager.colors.editorBackground)
-                    .environment(\.colorScheme, themeManager.currentTheme == .light ? .light : .dark)
-                    .padding(.leading, 8)
-                    .findNavigator(isPresented: $findState.isPresented)
+            HStack {
+                Spacer()
+                Text("Words: \(wordCount)  |  Characters: \(characterCount)")
+                    .font(.system(size: 11))
+                    .foregroundColor(themeManager.colors.tabText)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(themeManager.colors.tabBackground)
         }
         .background(themeManager.colors.editorBackground)
     }

@@ -12,11 +12,28 @@ final class FindState: ObservableObject {
     @Published var isPresented = false
 }
 
+final class ZoomState: ObservableObject {
+    @Published private(set) var fontSize: CGFloat = 12
+
+    func zoomIn() {
+        fontSize = min(fontSize + 2, 48)
+    }
+
+    func zoomOut() {
+        fontSize = max(fontSize - 2, 8)
+    }
+
+    func reset() {
+        fontSize = 12
+    }
+}
+
 @main
 struct SimpleNotepadApp: App {
     @StateObject private var themeManager = ThemeManager()
     @StateObject private var tabManager = TabManager()
     @StateObject private var findState = FindState()
+    @StateObject private var zoomState = ZoomState()
 
     var body: some Scene {
         WindowGroup {
@@ -24,6 +41,7 @@ struct SimpleNotepadApp: App {
                 .environmentObject(themeManager)
                 .environmentObject(tabManager)
                 .environmentObject(findState)
+                .environmentObject(zoomState)
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
@@ -47,6 +65,23 @@ struct SimpleNotepadApp: App {
                     findState.isPresented = true
                 }
                 .keyboardShortcut("f", modifiers: .command)
+            }
+
+            CommandGroup(after: .toolbar) {
+                Button("Zoom In") {
+                    zoomState.zoomIn()
+                }
+                .keyboardShortcut("+", modifiers: .command)
+
+                Button("Zoom Out") {
+                    zoomState.zoomOut()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Actual Size") {
+                    zoomState.reset()
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
 
             CommandGroup(replacing: .saveItem) {
