@@ -174,6 +174,7 @@ struct TabItem: View {
 struct EditorView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
+    @EnvironmentObject var findState: FindState
 
     private var currentContent: String {
         tabManager.getCurrentTab()?.content ?? ""
@@ -214,6 +215,7 @@ struct EditorView: View {
                     .background(themeManager.colors.editorBackground)
                     .environment(\.colorScheme, themeManager.currentTheme == .light ? .light : .dark)
                     .padding(.leading, 8)
+                    .findNavigator(isPresented: $findState.isPresented)
             }
         }
         .background(themeManager.colors.editorBackground)
