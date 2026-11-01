@@ -1,8 +1,8 @@
 //
 //  ThemeManager.swift
-//  mac-txt-editor
+//  LightNote+
 //
-//  Created by mnrds on 27.10.2026.
+//  Created by mnrds 
 //
 
 import SwiftUI

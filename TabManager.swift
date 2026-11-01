@@ -1,29 +1,154 @@
 //
 //  TabManager.swift
-//  mac-txt-editor
+//  LightNote+
 //
-//  Created by mnrds on 26.10.2026.
+//  Created by mnrds
 //
 
 import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
+enum TextFileEncoding: String, CaseIterable, Codable, Identifiable {
+    case utf8
+    case utf16
+    case utf16LittleEndian
+    case utf16BigEndian
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .utf8: return "UTF-8"
+        case .utf16: return "UTF-16"
+        case .utf16LittleEndian: return "UTF-16 LE"
+        case .utf16BigEndian: return "UTF-16 BE"
+        }
+    }
+
+    var stringEncoding: String.Encoding {
+        switch self {
+        case .utf8: return .utf8
+        case .utf16: return .utf16
+        case .utf16LittleEndian: return .utf16LittleEndian
+        case .utf16BigEndian: return .utf16BigEndian
+        }
+    }
+
+    static func detect(in data: Data) -> TextFileEncoding {
+        if data.starts(with: [0xEF, 0xBB, 0xBF]) {
+            return .utf8
+        }
+        if data.starts(with: [0xFF, 0xFE]) {
+            return .utf16LittleEndian
+        }
+        if data.starts(with: [0xFE, 0xFF]) {
+            return .utf16BigEndian
+        }
+
+        if data.count >= 4 {
+            let bytes = Array(data)
+            let evenZeroCount = stride(from: 0, to: bytes.count, by: 2)
+                .filter { bytes[$0] == 0 }.count
+            let oddZeroCount = stride(from: 1, to: bytes.count, by: 2)
+                .filter { bytes[$0] == 0 }.count
+
+            if oddZeroCount >= 2 && oddZeroCount > evenZeroCount * 2 {
+                return .utf16LittleEndian
+            }
+            if evenZeroCount >= 2 && evenZeroCount > oddZeroCount * 2 {
+                return .utf16BigEndian
+            }
+        }
+
+        guard String(data: data, encoding: .utf8) == nil,
+              data.count >= 2,
+              data.count.isMultiple(of: 2) else {
+            return .utf8
+        }
+
+        return String(data: data, encoding: .utf16LittleEndian) != nil
+            ? .utf16LittleEndian
+            : .utf16BigEndian
+    }
+
+    func decode(_ data: Data) -> String? {
+        var decoded = String(data: data, encoding: stringEncoding)
+        if decoded?.first == "\u{FEFF}" {
+            decoded?.removeFirst()
+        }
+        return decoded
+    }
+}
+
 final class TabManager: ObservableObject {
     @Published var tabs: [Tab] = []
     @Published var selectedTabIndex: Int = 0
     @Published var pendingCloseTabIndex: Int?
+    @Published private(set) var hasChangedThisLaunch = false
     private var autosaveWorkItems: [UUID: DispatchWorkItem] = [:]
     private let autosaveDelay: TimeInterval = 30
+    private var hasSessionStateChanged = false
+    private let sessionStorageKey = "previousSession"
+    private var previousSession: SessionSnapshot?
+    private var terminationObserver: NSObjectProtocol?
+
+    var canRestorePreviousSession: Bool {
+        previousSession?.tabs.isEmpty == false && !hasChangedThisLaunch
+    }
 
     init() {
-        newTab()
+        previousSession = loadPreviousSession()
+        tabs = [Tab(content: "", fileURL: nil, isEdited: false)]
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.saveCurrentSession()
+        }
+    }
+
+    deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
     }
 
     func newTab() {
+        hasChangedThisLaunch = true
+        hasSessionStateChanged = true
         let newTab = Tab(content: "", fileURL: nil, isEdited: false)
         tabs.append(newTab)
         selectedTabIndex = tabs.count - 1
+    }
+
+    func restorePreviousSession() {
+        guard canRestorePreviousSession, let previousSession else { return }
+
+        for tab in tabs {
+            cancelAutosave(for: tab.id)
+            stopSecurityScopedAccess(for: tab)
+        }
+
+        tabs = previousSession.tabs.map { savedTab in
+            Tab(
+                content: savedTab.content,
+                fileURL: savedTab.fileURL.flatMap { URL(string: $0) },
+                isEdited: savedTab.isEdited,
+                encoding: savedTab.encoding ?? .utf8
+            )
+        }
+        selectedTabIndex = min(
+            max(previousSession.selectedTabIndex, 0),
+            tabs.count - 1
+        )
+        hasChangedThisLaunch = true
+        hasSessionStateChanged = true
+
+        for tab in tabs where tab.isEdited && tab.fileURL != nil {
+            scheduleAutosave(for: tab)
+        }
     }
 
     func closeTab(at index: Int) {
@@ -44,6 +169,7 @@ final class TabManager: ObservableObject {
 
     private func removeTab(at index: Int) {
         pendingCloseTabIndex = nil
+        hasSessionStateChanged = true
         cancelAutosave(for: tabs[index].id)
         stopSecurityScopedAccess(for: tabs[index])
 
@@ -67,12 +193,24 @@ final class TabManager: ObservableObject {
 
     func selectTab(at index: Int) {
         guard index < tabs.count else { return }
+        hasSessionStateChanged = hasSessionStateChanged || selectedTabIndex != index
         selectedTabIndex = index
     }
 
     func getCurrentTab() -> Tab? {
         guard selectedTabIndex < tabs.count else { return nil }
         return tabs[selectedTabIndex]
+    }
+
+    func selectEncoding(_ encoding: TextFileEncoding) {
+        guard tabs.indices.contains(selectedTabIndex),
+              tabs[selectedTabIndex].encoding != encoding else { return }
+
+        tabs[selectedTabIndex].encoding = encoding
+        tabs[selectedTabIndex].isEdited = true
+        hasChangedThisLaunch = true
+        hasSessionStateChanged = true
+        scheduleAutosave(for: tabs[selectedTabIndex])
     }
 
     func saveCurrentTab() async -> Bool {
@@ -85,7 +223,7 @@ final class TabManager: ObservableObject {
 
         if let fileURL = tab.fileURL {
             do {
-                try tab.content.write(to: fileURL, atomically: true, encoding: .utf8)
+                try write(tab, to: fileURL)
                 tabs[index].isEdited = false
                 cancelAutosave(for: tab.id)
                 return true
@@ -116,7 +254,7 @@ final class TabManager: ObservableObject {
 
         let hasSecurityScopedAccess = url.startAccessingSecurityScopedResource()
         do {
-            try tab.content.write(to: url, atomically: true, encoding: .utf8)
+            try write(tab, to: url)
             guard tabs.indices.contains(index) else {
                 if hasSecurityScopedAccess {
                     url.stopAccessingSecurityScopedResource()
@@ -159,13 +297,20 @@ final class TabManager: ObservableObject {
 
         let hasSecurityScopedAccess = url.startAccessingSecurityScopedResource()
         do {
-            let content = try String(contentsOf: url, encoding: .utf8)
+            let data = try Data(contentsOf: url)
+            let encoding = TextFileEncoding.detect(in: data)
+            guard let content = encoding.decode(data) else {
+                throw CocoaError(.fileReadInapplicableStringEncoding)
+            }
             let newTab = Tab(
                 content: content,
                 fileURL: url,
                 isEdited: false,
-                hasSecurityScopedAccess: hasSecurityScopedAccess
+                hasSecurityScopedAccess: hasSecurityScopedAccess,
+                encoding: encoding
             )
+            hasChangedThisLaunch = true
+            hasSessionStateChanged = true
             tabs.append(newTab)
             selectedTabIndex = tabs.count - 1
         } catch {
@@ -178,8 +323,11 @@ final class TabManager: ObservableObject {
 
     func updateCurrentTabContent(_ newContent: String) {
         guard selectedTabIndex < tabs.count else { return }
+        guard tabs[selectedTabIndex].content != newContent else { return }
         tabs[selectedTabIndex].content = newContent
         tabs[selectedTabIndex].isEdited = true
+        hasChangedThisLaunch = true
+        hasSessionStateChanged = true
         scheduleAutosave(for: tabs[selectedTabIndex])
     }
 
@@ -204,7 +352,7 @@ final class TabManager: ObservableObject {
               let fileURL = tabs[index].fileURL else { return }
 
         do {
-            try tabs[index].content.write(to: fileURL, atomically: true, encoding: .utf8)
+            try write(tabs[index], to: fileURL)
             tabs[index].isEdited = false
             cancelAutosave(for: tabID)
         } catch {
@@ -221,6 +369,61 @@ final class TabManager: ObservableObject {
         guard tab.hasSecurityScopedAccess, let fileURL = tab.fileURL else { return }
         fileURL.stopAccessingSecurityScopedResource()
     }
+
+    private func write(_ tab: Tab, to url: URL) throws {
+        guard let data = tab.content.data(using: tab.encoding.stringEncoding) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func loadPreviousSession() -> SessionSnapshot? {
+        guard let data = UserDefaults.standard.data(forKey: sessionStorageKey) else {
+            return nil
+        }
+
+        do {
+            return try JSONDecoder().decode(SessionSnapshot.self, from: data)
+        } catch {
+            print("Error restoring previous session: \(error)")
+            return nil
+        }
+    }
+
+    private func saveCurrentSession() {
+        guard hasSessionStateChanged else { return }
+
+        let snapshot = SessionSnapshot(
+            tabs: tabs.map {
+                SavedTab(
+                    content: $0.content,
+                    fileURL: $0.fileURL?.absoluteString,
+                    isEdited: $0.isEdited,
+                    encoding: $0.encoding
+                )
+            },
+            selectedTabIndex: selectedTabIndex
+        )
+
+        do {
+            let data = try JSONEncoder().encode(snapshot)
+            UserDefaults.standard.set(data, forKey: sessionStorageKey)
+        } catch {
+            print("Error saving session: \(error)")
+        }
+    }
+
+    private struct SessionSnapshot: Codable {
+        let tabs: [SavedTab]
+        let selectedTabIndex: Int
+    }
+
+    private struct SavedTab: Codable {
+        let content: String
+        let fileURL: String?
+        let isEdited: Bool
+        let encoding: TextFileEncoding?
+    }
 }
 
 struct Tab {
@@ -229,6 +432,7 @@ struct Tab {
     var fileURL: URL?
     var isEdited: Bool
     var hasSecurityScopedAccess = false
+    var encoding: TextFileEncoding = .utf8
 
     var displayName: String {
         if let url = fileURL {

@@ -1,14 +1,14 @@
-//  SimpleNotepad/
-//  ├── SimpleNotepad/                  # Source files
+//  LightNote+/
+//  ├── LightNote+/                  # Source files
 //  │   ├── AppDelegate.swift           # App entry point//
 //  │   ├── ContentView.swift           # Main view with toolbar, tabs, and editor
 //  │   ├── ThemeManager.swift          # Dark/light theme management
 //  │   ├── TabManager.swift            # Tab system for multiple files
 //  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
 //  │   └── Info.plist                  # App configuration
-//  └── SimpleNotepad.xcodeproj/        # Xcode project files
+//  └── LightNotePlus.xcodeproj/        # Xcode project files
 //
-// Created by mnrds on 27.10.2026.
+// Created by mnrds
 //
 
 import SwiftUI
@@ -149,6 +149,14 @@ struct ToolbarView: View {
             .buttonStyle(.plain)
             .help("Close Tab")
 
+            Button(action: { tabManager.restorePreviousSession() }) {
+                Label("Session Restore", systemImage: "clock.arrow.circlepath")
+                    .foregroundColor(themeManager.colors.text)
+            }
+            .buttonStyle(.plain)
+            .disabled(!tabManager.canRestorePreviousSession)
+            .help("Restore tabs from the previous session")
+
             Spacer()
 
             Button(action: { themeManager.toggleTheme() }) {
@@ -249,6 +257,10 @@ struct EditorView: View {
         currentContent.count
     }
 
+    private var currentEncoding: TextFileEncoding {
+        tabManager.getCurrentTab()?.encoding ?? .utf8
+    }
+
     private var textEditor: some View {
         TextEditor(text: textBinding)
             .font(.system(size: zoomState.fontSize, design: .monospaced))
@@ -287,7 +299,32 @@ struct EditorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             HStack {
+                Text("Version 1.0")
+                    .font(.system(size: 11))
+                    .foregroundColor(themeManager.colors.tabText)
+
                 Spacer()
+                Menu {
+                    ForEach(TextFileEncoding.allCases) { encoding in
+                        Button {
+                            tabManager.selectEncoding(encoding)
+                        } label: {
+                            if currentEncoding == encoding {
+                                Label(encoding.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(encoding.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(currentEncoding.displayName)
+                        .font(.system(size: 11))
+                        .foregroundColor(themeManager.colors.tabText)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Select text encoding")
+
                 Text("Words: \(wordCount)  |  Characters: \(characterCount)")
                     .font(.system(size: 11))
                     .foregroundColor(themeManager.colors.tabText)

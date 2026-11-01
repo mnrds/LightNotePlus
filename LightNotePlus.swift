@@ -1,8 +1,8 @@
 //
-//  NotePadApp.swift
-//  mac-txt-editor
+//  LightNotePlus.swift
+//  Notepad App
 //
-//  Created by mnrds on 27.10.2026.
+//  Created by mnrds 
 //
 
 import SwiftUI
