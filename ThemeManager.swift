@@ -10,11 +10,22 @@ import Combine
 import Foundation
 
 final class ThemeManager: ObservableObject {
-    @Published var currentTheme: Theme = .light
+    @Published var currentTheme: Theme {
+        didSet {
+            UserDefaults.standard.set(currentTheme.rawValue, forKey: Self.themeStorageKey)
+        }
+    }
+
+    private static let themeStorageKey = "selectedTheme"
 
     enum Theme: String, CaseIterable {
         case light
         case dark
+    }
+
+    init() {
+        currentTheme = UserDefaults.standard.string(forKey: Self.themeStorageKey)
+            .flatMap(Theme.init(rawValue:)) ?? .light
     }
 
     func toggleTheme() {

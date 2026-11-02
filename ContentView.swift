@@ -13,6 +13,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var themeManager: ThemeManager
@@ -228,6 +229,103 @@ struct TabItem: View {
     }
 }
 
+private struct HighlightedSyntaxEditor: NSViewRepresentable {
+    @Binding var text: String
+    let theme: ThemeManager.Theme
+    let fontSize: CGFloat
+    let language: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = NSTextView()
+        textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainerInset = NSSize(width: 5, height: 8)
+        textView.textContainer?.widthTracksTextView = true
+
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = false
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        let coordinator = context.coordinator
+        coordinator.text = $text
+        coordinator.highlighter.update(text: text, theme: theme, language: language)
+
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let textColor = theme == .light ? NSColor.black : NSColor.white
+        textView.font = font
+        textView.textColor = textColor
+        textView.insertionPointColor = textColor
+        textView.backgroundColor = theme == .light
+            ? NSColor.white
+            : NSColor(calibratedRed: 0.1, green: 0.1, blue: 0.12, alpha: 1)
+        textView.typingAttributes = [
+            .font: font,
+            .foregroundColor: textColor
+        ]
+
+        let formattedText = NSMutableAttributedString(
+            attributedString: coordinator.highlighter.highlightedText
+        )
+        if formattedText.length > 0 {
+            formattedText.addAttribute(
+                .font,
+                value: font,
+                range: NSRange(location: 0, length: formattedText.length)
+            )
+        }
+
+        guard !textView.attributedString().isEqual(to: formattedText) else { return }
+
+        let selection = textView.selectedRange()
+        let location = min(selection.location, formattedText.length)
+        let length = min(selection.length, formattedText.length - location)
+        coordinator.isApplyingChanges = true
+        textView.textStorage?.setAttributedString(formattedText)
+        textView.setSelectedRange(NSRange(location: location, length: length))
+        coordinator.isApplyingChanges = false
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: Binding<String>
+        let highlighter = SyntaxHighlighter()
+        var isApplyingChanges = false
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingChanges,
+                  let textView = notification.object as? NSTextView else {
+                return
+            }
+            text.wrappedValue = textView.string
+        }
+    }
+}
+
 struct EditorView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
@@ -236,6 +334,10 @@ struct EditorView: View {
 
     private var currentContent: String {
         tabManager.getCurrentTab()?.content ?? ""
+    }
+
+    private var currentLanguage: String? {
+        SyntaxHighlighter.detectLanguage(from: tabManager.getCurrentTab()?.fileURL)
     }
 
     private var textBinding: Binding<String> {
@@ -261,14 +363,31 @@ struct EditorView: View {
         tabManager.getCurrentTab()?.encoding ?? .utf8
     }
 
+    @ViewBuilder
     private var textEditor: some View {
-        TextEditor(text: textBinding)
-            .font(.system(size: zoomState.fontSize, design: .monospaced))
-            .foregroundColor(themeManager.colors.editorText)
-            .scrollContentBackground(.hidden)
-            .background(themeManager.colors.editorBackground)
-            .environment(\.colorScheme, themeManager.currentTheme == .light ? .light : .dark)
+        if currentLanguage == "html" || currentLanguage == "css" {
+            HighlightedSyntaxEditor(
+                text: textBinding,
+                theme: themeManager.currentTheme,
+                fontSize: zoomState.fontSize,
+                language: currentLanguage ?? "html"
+            )
             .padding(.leading, 8)
+        } else {
+            let editor = TextEditor(text: textBinding)
+                .font(.system(size: zoomState.fontSize, design: .monospaced))
+                .foregroundColor(themeManager.colors.editorText)
+                .scrollContentBackground(.hidden)
+                .background(themeManager.colors.editorBackground)
+                .environment(\.colorScheme, themeManager.currentTheme == .light ? .light : .dark)
+                .padding(.leading, 8)
+
+            if #available(macOS 26.0, *) {
+                editor.findNavigator(isPresented: $findState.isPresented)
+            } else {
+                editor
+            }
+        }
     }
 
     var body: some View {
@@ -288,10 +407,11 @@ struct EditorView: View {
                 .background(themeManager.colors.editorBackground)
                 .frame(width: 50)
 
-                ScrollView {
-                    if #available(macOS 26.0, *) {
-                        textEditor.findNavigator(isPresented: $findState.isPresented)
-                    } else {
+                if currentLanguage == "html" || currentLanguage == "css" {
+                    textEditor
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
                         textEditor
                     }
                 }
