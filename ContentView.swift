@@ -1,7 +1,8 @@
 //  LightNote+/
 //  ├── LightNote+/                  # Source files
 //  │   ├── AppDelegate.swift           # App entry point//
-//  │   ├── ContentView.swift           # Main view with toolbar, tabs, and editor
+//  │   ├── ContentView.swift           # Main Text-editor view with toolbar, tabs, and editor
+//  │   ├── NoteView.swift              # Notes view with file tree and note editor
 //  │   ├── ThemeManager.swift          # Dark/light theme management
 //  │   ├── TabManager.swift            # Tab system for multiple files
 //  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
@@ -19,20 +20,27 @@ struct ContentView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
     @State private var isTargeted = false
+    @State private var showsNotesView = false
+    @StateObject private var notesWorkspace = NotesWorkspaceModel()
 
     var body: some View {
         VStack(spacing: 0) {
-            ToolbarView()
+            ToolbarView(showsNotesView: $showsNotesView)
                 .environmentObject(themeManager)
                 .environmentObject(tabManager)
 
-            TabBarView()
-                .environmentObject(themeManager)
-                .environmentObject(tabManager)
+            if showsNotesView {
+                NoteView(model: notesWorkspace)
+                    .environmentObject(themeManager)
+            } else {
+                TabBarView()
+                    .environmentObject(themeManager)
+                    .environmentObject(tabManager)
 
-            EditorView()
-                .environmentObject(themeManager)
-                .environmentObject(tabManager)
+                EditorView()
+                    .environmentObject(themeManager)
+                    .environmentObject(tabManager)
+            }
         }
         .frame(minWidth: 400, minHeight: 300)
         .background(themeManager.colors.background)
@@ -119,46 +127,58 @@ struct ContentView: View {
 struct ToolbarView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
+    @Binding var showsNotesView: Bool
 
     var body: some View {
         HStack {
-            Button(action: { Task { await tabManager.openFile() } }) {
-                Image(systemName: "folder")
-                    .foregroundColor(themeManager.colors.text)
-            }
-            .buttonStyle(.plain)
-            .help("Open")
+            if !showsNotesView {
+                Button(action: { Task { await tabManager.openFile() } }) {
+                    Image(systemName: "folder")
+                        .foregroundColor(themeManager.colors.text)
+                }
+                .buttonStyle(.plain)
+                .help("Open")
 
-            Button(action: { Task { await tabManager.saveCurrentTab() } }) {
-                Image(systemName: "square.and.arrow.down")
-                    .foregroundColor(themeManager.colors.text)
-            }
-            .buttonStyle(.plain)
-            .help("Save")
+                Button(action: { Task { await tabManager.saveCurrentTab() } }) {
+                    Image(systemName: "square.and.arrow.down")
+                        .foregroundColor(themeManager.colors.text)
+                }
+                .buttonStyle(.plain)
+                .help("Save")
 
-            Button(action: { tabManager.newTab() }) {
-                Image(systemName: "plus")
-                    .foregroundColor(themeManager.colors.text)
-            }
-            .buttonStyle(.plain)
-            .help("New Tab")
+                Button(action: { tabManager.newTab() }) {
+                    Image(systemName: "plus")
+                        .foregroundColor(themeManager.colors.text)
+                }
+                .buttonStyle(.plain)
+                .help("New Tab")
 
-            Button(action: { tabManager.closeCurrentTab() }) {
-                Image(systemName: "xmark")
-                    .foregroundColor(themeManager.colors.text)
-            }
-            .buttonStyle(.plain)
-            .help("Close Tab")
+                Button(action: { tabManager.closeCurrentTab() }) {
+                    Image(systemName: "xmark")
+                        .foregroundColor(themeManager.colors.text)
+                }
+                .buttonStyle(.plain)
+                .help("Close Tab")
 
-            Button(action: { tabManager.restorePreviousSession() }) {
-                Label("Session Restore", systemImage: "clock.arrow.circlepath")
-                    .foregroundColor(themeManager.colors.text)
+                Button(action: { tabManager.restorePreviousSession() }) {
+                    Label("Session Restore", systemImage: "clock.arrow.circlepath")
+                        .foregroundColor(themeManager.colors.text)
+                }
+                .buttonStyle(.plain)
+                .disabled(!tabManager.canRestorePreviousSession)
+                .help("Restore tabs from the previous session")
             }
-            .buttonStyle(.plain)
-            .disabled(!tabManager.canRestorePreviousSession)
-            .help("Restore tabs from the previous session")
 
             Spacer()
+
+            Button {
+                showsNotesView.toggle()
+            } label: {
+                Image(systemName: "arrow.left.arrow.right")
+                    .foregroundColor(themeManager.colors.text)
+            }
+            .buttonStyle(.plain)
+            .help(showsNotesView ? "Switch to Text Editor" : "Switch to Notes")
 
             Button(action: { themeManager.toggleTheme() }) {
                 Image(systemName: themeManager.currentTheme == .light ? "moon.fill" : "sun.max.fill")
@@ -419,7 +439,7 @@ struct EditorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             HStack {
-                Text("Version 1.0")
+                Text("Version 1.1")
                     .font(.system(size: 11))
                     .foregroundColor(themeManager.colors.tabText)
 
