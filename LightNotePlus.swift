@@ -1,8 +1,21 @@
 //
 //  LightNotePlus.swift
-//  Notepad App
+//  
 //
 //  Created by mnrds 
+//
+//  LightNote+/
+//  ├── LightNote+/                  # Source files
+//  │   ├── AppDelegate.swift           # App entry point//
+//  │   ├── ContentView.swift           # Main Text-editor view with toolbar, tabs, and editor
+//  │   ├── NoteView.swift              # Notes view with file tree and note editor
+//  │   ├── ThemeManager.swift          # Dark/light theme management
+//  │   ├── TabManager.swift            # Tab system for multiple files
+//  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
+//  │   └── Info.plist                  # App configuration
+//  └── LightNotePlus.xcodeproj/        # Xcode project files
+//
+// Created by mnrds
 //
 
 import SwiftUI
