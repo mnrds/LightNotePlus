@@ -12,6 +12,7 @@
 //  │   ├── ThemeManager.swift          # Dark/light theme management
 //  │   ├── TabManager.swift            # Tab system for multiple files
 //  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
+//  │   ├── AppSettings.swift.swift     # App settings management
 //  │   └── Info.plist                  # App configuration
 //  └── LightNotePlus.xcodeproj/        # Xcode project files
 //
@@ -47,6 +48,7 @@ struct SimpleNotepadApp: App {
     @StateObject private var tabManager = TabManager()
     @StateObject private var findState = FindState()
     @StateObject private var zoomState = ZoomState()
+    @StateObject private var notesWorkspace = NotesWorkspaceModel()
 
     var body: some Scene {
         WindowGroup {
@@ -55,6 +57,7 @@ struct SimpleNotepadApp: App {
                 .environmentObject(tabManager)
                 .environmentObject(findState)
                 .environmentObject(zoomState)
+                .environmentObject(notesWorkspace)
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
@@ -108,6 +111,12 @@ struct SimpleNotepadApp: App {
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
             }
+        }
+
+        Settings {
+            AppSettings()
+                .environmentObject(themeManager)
+                .environmentObject(notesWorkspace)
         }
     }
 

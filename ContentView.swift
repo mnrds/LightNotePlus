@@ -1,13 +1,6 @@
 //  LightNote+/
-//  ├── LightNote+/                  # Source files
-//  │   ├── AppDelegate.swift           # App entry point//
-//  │   ├── ContentView.swift           # Main Text-editor view with toolbar, tabs, and editor
-//  │   ├── NoteView.swift              # Notes view with file tree and note editor
-//  │   ├── ThemeManager.swift          # Dark/light theme management
-//  │   ├── TabManager.swift            # Tab system for multiple files
-//  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
-//  │   └── Info.plist                  # App configuration
-//  └── LightNotePlus.xcodeproj/        # Xcode project files
+//  This is the text editor app inside LightNote+
+//  Original main program file. 
 //
 // Created by mnrds
 //
@@ -19,9 +12,9 @@ import AppKit
 struct ContentView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var tabManager: TabManager
+    @EnvironmentObject private var notesWorkspace: NotesWorkspaceModel
     @State private var isTargeted = false
     @State private var showsNotesView = false
-    @StateObject private var notesWorkspace = NotesWorkspaceModel()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +53,7 @@ struct ContentView: View {
             isTargeted: $isTargeted,
             perform: handleFileDrop
         )
+        .onAppear(perform: notesWorkspace.loadWorkspace)
         .alert(
             "Save changes before closing?",
             isPresented: Binding(

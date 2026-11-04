@@ -1,13 +1,20 @@
 //  LightNote+/
-//  ├── LightNote+/                  # Source files
-//  │   ├── AppDelegate.swift           # App entry point//
-//  │   ├── ContentView.swift           # Main Text-editor view with toolbar, tabs, and editor
-//  │   ├── NoteView.swift              # Notes view with file tree and note editor
-//  │   ├── ThemeManager.swift          # Dark/light theme management
-//  │   ├── TabManager.swift            # Tab system for multiple files
-//  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
-//  │   └── Info.plist                  # App configuration
-//  └── LightNotePlus.xcodeproj/        # Xcode project files
+//
+//  NoteView.swift structure:
+//  ├── Note formatting and Markdown editor
+//  │   ├── NoteFormattingAction / NoteEditorFormatting
+//  │   ├── NoteMarkdownEditor
+//  │   └── MarkdownTextView
+//  ├── Markdown preview
+//  │   ├── NoteMarkdownBlock
+//  │   └── NoteMarkdownPreview / PreviewMarkdownTextView
+//  ├── Notes data and workspace
+//  │   ├── NoteTreeItem / NoteHeading
+//  │   └── NotesWorkspaceModel
+//  └── Notes interface
+//      ├── NoteTreeRow
+//      ├── NoteFormattingToolbar
+//      └── NoteView
 //
 // Created by mnrds
 //
@@ -16,11 +23,16 @@ import SwiftUI
 import Combine
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
 private enum NoteFormattingAction {
     case bold
     case italic
     case title
+    case separator
+    case checklist
+    case quote
+    case link(url: String)
 }
 
 private struct NoteFormattingRequest {
@@ -93,6 +105,14 @@ private struct NoteMarkdownEditor: NSViewRepresentable {
             context.coordinator.format(textView, with: "*")
         case .title:
             context.coordinator.addTitle(to: textView)
+        case .separator:
+            context.coordinator.insertSeparator(in: textView)
+        case .checklist:
+            context.coordinator.prefixLines(in: textView, with: "- [ ] ")
+        case .quote:
+            context.coordinator.prefixLines(in: textView, with: "> ")
+        case .link(let url):
+            context.coordinator.insertLink(in: textView, url: url)
         }
     }
 
@@ -144,6 +164,51 @@ private struct NoteMarkdownEditor: NSViewRepresentable {
                 NSRange(location: selection.location + 2, length: selection.length)
             )
         }
+
+        func insertSeparator(in textView: NSTextView) {
+            let source = textView.string as NSString
+            let location = min(textView.selectedRange().location, source.length)
+            let lineRange = source.lineRange(for: NSRange(location: location, length: 0))
+            textView.insertText("---\n", replacementRange: NSRange(location: lineRange.location, length: 0))
+        }
+
+        func prefixLines(in textView: NSTextView, with prefix: String) {
+            let source = textView.string as NSString
+            let selection = textView.selectedRange()
+            guard selection.location != NSNotFound, selection.location <= source.length else { return }
+            let first = source.lineRange(for: NSRange(location: selection.location, length: 0))
+            let lastLocation = selection.length == 0
+                ? selection.location
+                : min(NSMaxRange(selection) - 1, source.length)
+            let last = source.lineRange(for: NSRange(location: lastLocation, length: 0))
+            let linesRange = NSRange(
+                location: first.location,
+                length: NSMaxRange(last) - first.location
+            )
+            let selectedLines = source.substring(with: linesRange)
+            let hasTrailingNewline = selectedLines.hasSuffix("\n")
+            var lines = selectedLines.components(separatedBy: .newlines)
+            if lines.last?.isEmpty == true { lines.removeLast() }
+            var replacement = lines.map { prefix + $0 }.joined(separator: "\n")
+            if hasTrailingNewline {
+                replacement.append("\n")
+            }
+            textView.insertText(replacement, replacementRange: linesRange)
+        }
+
+        func insertLink(in textView: NSTextView, url: String) {
+            let selection = textView.selectedRange()
+            let source = textView.string as NSString
+            guard selection.location != NSNotFound,
+                  selection.location <= source.length,
+                  NSMaxRange(selection) <= source.length else { return }
+            let selectedText = selection.length > 0
+                ? source.substring(with: selection)
+                : "link text"
+            let destination = url.contains("://") ? url : "https://\(url)"
+            let markdown = "[\(selectedText)](\(destination))"
+            textView.insertText(markdown, replacementRange: selection)
+        }
     }
 }
 
@@ -174,6 +239,54 @@ private final class MarkdownTextView: NSTextView {
 private final class PreviewMarkdownTextView: NSTextView {
     var onBold: (() -> Void)?
     var onItalic: (() -> Void)?
+    var onToggleChecklist: ((NSRange) -> Void)?
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let textStorage, let layoutManager, let textContainer else { return }
+
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        textStorage.enumerateAttribute(.noteParagraphKind, in: fullRange) { value, range, _ in
+            guard value as? String == "divider", range.length > 0 else { return }
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            let lineRect = layoutManager.boundingRect(
+                forGlyphRange: glyphRange,
+                in: textContainer
+            )
+            let origin = textContainerOrigin
+            let y = lineRect.midY + origin.y
+            let inset = origin.x
+            let path = NSBezierPath()
+            path.lineWidth = 1
+            path.move(to: NSPoint(x: inset, y: y))
+            path.line(to: NSPoint(x: max(inset, bounds.width - inset), y: y))
+            (textColor ?? NSColor.separatorColor).withAlphaComponent(0.35).setStroke()
+            path.stroke()
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let characterIndex = characterIndexForInsertion(at: point)
+        let source = string as NSString
+        if characterIndex < source.length {
+            let lineRange = source.lineRange(
+                for: NSRange(location: characterIndex, length: 0)
+            )
+            let attributes = textStorage?.attributes(at: characterIndex, effectiveRange: nil) ?? [:]
+            let prefixLength = attributes[.noteVisiblePrefixLength] as? Int ?? 0
+            let isChecklist = attributes[.noteChecklistChecked] != nil
+            if isChecklist,
+               characterIndex < lineRange.location + prefixLength {
+                onToggleChecklist?(lineRange)
+                return
+            }
+        }
+        super.mouseDown(with: event)
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.command),
@@ -200,6 +313,7 @@ private extension NSAttributedString.Key {
     static let noteHeadingLevel = NSAttributedString.Key("LightNotePlus.HeadingLevel")
     static let noteListPrefix = NSAttributedString.Key("LightNotePlus.ListPrefix")
     static let noteVisiblePrefixLength = NSAttributedString.Key("LightNotePlus.VisiblePrefixLength")
+    static let noteChecklistChecked = NSAttributedString.Key("LightNotePlus.ChecklistChecked")
 }
 
 private struct NoteMarkdownBlock: Identifiable {
@@ -207,6 +321,7 @@ private struct NoteMarkdownBlock: Identifiable {
         case heading(level: Int)
         case paragraph
         case unorderedItem(indent: Int)
+        case checklistItem(indent: Int, checked: Bool)
         case orderedItem(indent: Int, number: String)
         case quote
         case code
@@ -232,6 +347,9 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onBold = { context.coordinator.toggleTrait(.boldFontMask, in: textView) }
         textView.onItalic = { context.coordinator.toggleTrait(.italicFontMask, in: textView) }
+        textView.onToggleChecklist = { range in
+            context.coordinator.toggleChecklist(at: range, in: textView)
+        }
         textView.isRichText = true
         textView.allowsUndo = true
         textView.drawsBackground = false
@@ -266,6 +384,14 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
             context.coordinator.toggleTrait(.italicFontMask, in: textView)
         case .title:
             context.coordinator.setHeading(level: 1, in: textView)
+        case .separator:
+            context.coordinator.insertSeparator(in: textView)
+        case .checklist:
+            context.coordinator.insertChecklistItem(in: textView)
+        case .quote:
+            context.coordinator.insertQuote(in: textView)
+        case .link(let url):
+            context.coordinator.insertLink(in: textView, url: url)
         }
     }
 
@@ -345,6 +471,129 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
         func textViewDidChange(_ notification: Notification) {
             textDidChange(notification)
         }
+
+        func insertSeparator(in textView: NSTextView) {
+            let source = textView.string as NSString
+            let selection = textView.selectedRange()
+            let location = min(selection.location, source.length)
+            let lineRange = source.lineRange(for: NSRange(location: location, length: 0))
+            let hasTrailingNewline = lineRange.length > 0
+                && source.character(at: NSMaxRange(lineRange) - 1) == 10
+            let insertLocation = hasTrailingNewline ? NSMaxRange(lineRange) : source.length
+            let separator = NSMutableAttributedString(
+                string: (hasTrailingNewline ? "" : "\n") + "\u{200B}",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 16),
+                    .foregroundColor: textView.textColor ?? NSColor.labelColor,
+                    .noteParagraphKind: "divider"
+                ]
+            )
+            separator.append(NSAttributedString(string: "\n"))
+            textView.textStorage?.insert(separator, at: insertLocation)
+            textView.setSelectedRange(NSRange(location: insertLocation + separator.length, length: 0))
+            textViewDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
+
+        func insertChecklistItem(in textView: NSTextView) {
+            insertPrefixedLine(
+                in: textView,
+                visiblePrefix: "☐  ",
+                markdownPrefix: "- [ ] ",
+                kind: "checklist",
+                checklistChecked: false
+            )
+        }
+
+        func insertQuote(in textView: NSTextView) {
+            insertPrefixedLine(
+                in: textView,
+                visiblePrefix: "▏  ",
+                markdownPrefix: "> ",
+                kind: "quote"
+            )
+        }
+
+        private func insertPrefixedLine(
+            in textView: NSTextView,
+            visiblePrefix: String,
+            markdownPrefix: String,
+            kind: String,
+            checklistChecked: Bool? = nil
+        ) {
+            let source = textView.string as NSString
+            let selection = textView.selectedRange()
+            let location = min(selection.location, source.length)
+            let lineRange = source.lineRange(for: NSRange(location: location, length: 0))
+            let hasTrailingNewline = lineRange.length > 0
+                && source.character(at: NSMaxRange(lineRange) - 1) == 10
+            let insertLocation = NSMaxRange(lineRange) - (hasTrailingNewline ? 1 : 0)
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 16),
+                .foregroundColor: textView.textColor ?? NSColor.labelColor,
+                .noteParagraphKind: kind,
+                .noteListPrefix: markdownPrefix,
+                .noteVisiblePrefixLength: (visiblePrefix as NSString).length
+            ]
+            let insertion = NSMutableAttributedString(string: "\n" + visiblePrefix + "\n", attributes: attributes)
+            if let checklistChecked {
+                insertion.addAttribute(
+                    .noteChecklistChecked,
+                    value: checklistChecked,
+                    range: NSRange(location: 0, length: insertion.length)
+                )
+            }
+            textView.textStorage?.insert(insertion, at: insertLocation)
+            textView.setSelectedRange(NSRange(location: insertLocation + 1 + visiblePrefix.utf16.count, length: 0))
+            textViewDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
+
+        func toggleChecklist(at lineRange: NSRange, in textView: NSTextView) {
+            guard lineRange.length > 0 else { return }
+            let current = textView.textStorage?.attribute(
+                .noteChecklistChecked,
+                at: lineRange.location,
+                effectiveRange: nil
+            ) as? Bool ?? false
+            let updated = !current
+            textView.textStorage?.addAttribute(
+                .noteChecklistChecked,
+                value: updated,
+                range: lineRange
+            )
+            textView.textStorage?.addAttribute(
+                .noteListPrefix,
+                value: updated ? "- [x] " : "- [ ] ",
+                range: lineRange
+            )
+            textView.textStorage?.replaceCharacters(
+                in: NSRange(location: lineRange.location, length: 1),
+                with: updated ? "☑" : "☐"
+            )
+            textViewDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
+
+        func insertLink(in textView: NSTextView, url: String) {
+            let selection = textView.selectedRange()
+            let source = textView.string as NSString
+            guard selection.location != NSNotFound,
+                  selection.location <= source.length,
+                  NSMaxRange(selection) <= source.length,
+                  let destination = URL(string: url.contains("://") ? url : "https://\(url)") else { return }
+            let label = selection.length > 0 ? source.substring(with: selection) : "link text"
+            let insertion = NSMutableAttributedString(
+                string: label,
+                attributes: [
+                    .font: textView.typingAttributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 16),
+                    .foregroundColor: NSColor.systemBlue,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .link: destination
+                ]
+            )
+            textView.textStorage?.replaceCharacters(in: selection, with: insertion)
+            textView.setSelectedRange(NSRange(location: selection.location + insertion.length, length: 0))
+            textViewDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
+
     }
 
     private static func attributedString(from markdown: String, textColor: NSColor) -> NSAttributedString {
@@ -361,7 +610,7 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
             if case .code = block.kind {
                 inline = AttributedString(block.text)
             } else if case .divider = block.kind {
-                inline = AttributedString(String(repeating: "─", count: 40))
+                inline = AttributedString("\u{200B}")
             } else {
                 inline = (try? AttributedString(
                     markdown: block.text,
@@ -375,6 +624,11 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
             case .unorderedItem(let indent):
                 markdownListPrefix = String(repeating: " ", count: indent * 2) + "- "
                 visiblePrefix = String(repeating: "    ", count: indent) + "•  "
+            case .checklistItem(let indent, let checked):
+                markdownListPrefix = String(repeating: " ", count: indent * 2)
+                    + (checked ? "- [x] " : "- [ ] ")
+                visiblePrefix = String(repeating: "    ", count: indent)
+                    + (checked ? "☑  " : "☐  ")
             case .orderedItem(let indent, let number):
                 markdownListPrefix = String(repeating: " ", count: indent * 2) + "\(number). "
                 visiblePrefix = String(repeating: "    ", count: indent) + "\(number).  "
@@ -394,6 +648,17 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
                 let font = NSFontManager.shared.convert(baseFont, toHaveTrait: traits)
                 rendered.addAttribute(.font, value: font, range: range)
             }
+            rendered.enumerateAttribute(.link, in: inlineRange) { value, range, _ in
+                guard let link = value, range.length > 0 else { return }
+                rendered.addAttributes(
+                    [
+                        .link: link,
+                        .foregroundColor: NSColor.systemBlue,
+                        .underlineStyle: NSUnderlineStyle.single.rawValue
+                    ],
+                    range: range
+                )
+            }
 
             let paragraphKind: String
             let fontSize: CGFloat
@@ -411,6 +676,15 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
                 paragraphKind = "unordered"
                 fontSize = 16
                 headingLevel = nil
+            case .checklistItem(_, let checked):
+                paragraphKind = "checklist"
+                fontSize = 16
+                headingLevel = nil
+                rendered.addAttribute(
+                    .noteChecklistChecked,
+                    value: checked,
+                    range: NSRange(location: 0, length: rendered.length)
+                )
             case .orderedItem:
                 paragraphKind = "ordered"
                 fontSize = 16
@@ -445,6 +719,13 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
                     rendered.addAttribute(.noteHeadingLevel, value: headingLevel, range: fullRange)
                 }
                 rendered.addAttribute(.noteParagraphKind, value: paragraphKind, range: fullRange)
+                if case .checklistItem(_, let checked) = block.kind {
+                    rendered.addAttribute(
+                        .noteChecklistChecked,
+                        value: checked,
+                        range: fullRange
+                    )
+                }
                 rendered.enumerateAttribute(.font, in: fullRange) { value, range, _ in
                     let oldFont = value as? NSFont ?? baseFont
                     let traits = NSFontManager.shared.traits(of: oldFont)
@@ -465,7 +746,18 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
 
         let finalLength = result.length
         if finalLength > 0 {
-            result.addAttribute(.foregroundColor, value: textColor, range: NSRange(location: 0, length: finalLength))
+            let fullRange = NSRange(location: 0, length: finalLength)
+            result.addAttribute(.foregroundColor, value: textColor, range: fullRange)
+            result.enumerateAttribute(.link, in: fullRange) { link, range, _ in
+                guard link != nil else { return }
+                result.addAttributes(
+                    [
+                        .foregroundColor: NSColor.systemBlue,
+                        .underlineStyle: NSUnderlineStyle.single.rawValue
+                    ],
+                    range: range
+                )
+            }
         }
         return result
     }
@@ -490,6 +782,7 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
             let kind = attributes[.noteParagraphKind] as? String
             let headingLevel = attributes[.noteHeadingLevel] as? Int
             let visiblePrefixLength = attributes[.noteVisiblePrefixLength] as? Int ?? 0
+            let checklistChecked = attributes[.noteChecklistChecked] as? Bool ?? false
             if kind == "code", !isInsideCodeBlock {
                 lines.append("```")
                 isInsideCodeBlock = true
@@ -502,6 +795,8 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
                 prefix = String(repeating: "#", count: headingLevel) + " "
             } else if kind == "quote" {
                 prefix = "> "
+            } else if kind == "checklist" {
+                prefix = checklistChecked ? "- [x] " : "- [ ] "
             } else if let listPrefix = attributes[.noteListPrefix] as? String {
                 prefix = listPrefix
             } else if kind == "divider" {
@@ -528,7 +823,19 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
     private static func markdownInline(from text: NSAttributedString, range: NSRange) -> String {
         guard range.length > 0 else { return "" }
         var result = ""
-        var currentStyle: (bold: Bool, italic: Bool)?
+        var currentRun: (style: (bold: Bool, italic: Bool), link: String?, text: String)?
+
+        func appendRun(_ run: (style: (bold: Bool, italic: Bool), link: String?, text: String)) {
+            var value = run.text
+            if run.style.bold && run.style.italic { value = "***\(value)***" }
+            else if run.style.bold { value = "**\(value)**" }
+            else if run.style.italic { value = "*\(value)*" }
+            if let link = run.link {
+                value = "[\(value)](\(link))"
+            }
+            result += value
+        }
+
         text.enumerateAttributes(in: range) { attributes, subrange, _ in
             let font = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 16)
             let traits = NSFontManager.shared.traits(of: font)
@@ -537,24 +844,19 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
                 italic: traits.contains(.italicFontMask)
             )
             let string = (text.string as NSString).substring(with: subrange)
-            if style.bold != currentStyle?.bold || style.italic != currentStyle?.italic {
-                if let currentStyle {
-                    if currentStyle.bold && currentStyle.italic { result += "***" }
-                    else if currentStyle.bold { result += "**" }
-                    else if currentStyle.italic { result += "*" }
-                }
-                if style.bold && style.italic { result += "***" }
-                else if style.bold { result += "**" }
-                else if style.italic { result += "*" }
-                currentStyle = style
+            let link = (attributes[.link] as? URL)?.absoluteString
+                ?? attributes[.link] as? String
+            if let run = currentRun,
+               run.style.bold == style.bold,
+               run.style.italic == style.italic,
+               run.link == link {
+                currentRun = (style, link, run.text + string)
+            } else {
+                if let currentRun { appendRun(currentRun) }
+                currentRun = (style, link, string)
             }
-            result += string
         }
-        if let currentStyle {
-            if currentStyle.bold && currentStyle.italic { result += "***" }
-            else if currentStyle.bold { result += "**" }
-            else if currentStyle.italic { result += "*" }
-        }
+        if let currentRun { appendRun(currentRun) }
         return result
     }
 
@@ -625,6 +927,15 @@ private struct NoteMarkdownPreview: NSViewRepresentable {
             } else if let quote = match(trimmed, pattern: #"^>\s?(.*)$"#) {
                 flushParagraph()
                 append(.quote, quote[1])
+            } else if let item = match(line, pattern: #"^(\s*)[-+*]\s+\[([ xX])\]\s*(.*)$"#) {
+                flushParagraph()
+                append(
+                    .checklistItem(
+                        indent: item[1].count / 2,
+                        checked: item[2].lowercased() == "x"
+                    ),
+                    item[3]
+                )
             } else if let item = match(line, pattern: #"^(\s*)[-+*]\s+(.+)$"#) {
                 flushParagraph()
                 append(.unorderedItem(indent: item[1].count / 2), item[2])
@@ -668,21 +979,61 @@ struct NoteTreeItem: Identifiable {
     var id: String { url.absoluteString }
 }
 
+struct NoteHeading: Codable, Identifiable, Hashable {
+    let id: UUID
+    let title: String
+}
+
+private struct NotesSidebarMetadata: Codable {
+    var headings: [NoteHeading]
+    var noteAssignments: [String: UUID]
+}
+
+private struct NotesOrganizationExport: Codable {
+    let version: Int
+    let headings: [NoteHeading]
+    let noteAssignments: [String: UUID]
+}
+
+private enum NotesOrganizationTransferError: LocalizedError {
+    case unsupportedVersion
+    case invalidHeadings
+    case invalidAssignmentPath
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedVersion:
+            return "This notes organization file has an unsupported version."
+        case .invalidHeadings:
+            return "The notes organization file contains invalid or duplicate headings."
+        case .invalidAssignmentPath:
+            return "The notes organization file contains an invalid note path."
+        }
+    }
+}
+
 @MainActor
 final class NotesWorkspaceModel: ObservableObject {
     @Published private(set) var notes: [NoteTreeItem] = []
+    @Published private(set) var headings: [NoteHeading] = []
+    @Published private(set) var noteAssignments: [String: UUID] = [:]
     @Published private(set) var selectedNoteURL: URL?
     @Published var content = ""
     @Published var errorMessage: String?
+    private var hasLoadedSidebarMetadata = false
 
     // Documents/LightNotePlus/Notes
     let rootURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Documents", isDirectory: true)
         .appendingPathComponent("LightNotePlus", isDirectory: true)
         .appendingPathComponent("Notes", isDirectory: true)
+    private var sidebarMetadataKey: String {
+        "notes.sidebar.metadata.\(rootURL.standardizedFileURL.path)"
+    }
 
     func loadWorkspace() {
         do {
+            loadSidebarMetadata()
             try FileManager.default.createDirectory(
                 at: rootURL,
                 withIntermediateDirectories: true
@@ -699,6 +1050,208 @@ final class NotesWorkspaceModel: ObservableObject {
             }
         } catch {
             errorMessage = "Unable to load the notes folder: \(error.localizedDescription)"
+        }
+    }
+
+    func notes(inHeading headingID: UUID?) -> [NoteTreeItem] {
+        filteredTree(notes, headingID: headingID)
+    }
+
+    func exportOrganization() throws -> Data {
+        let rootPath = rootURL.standardizedFileURL.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        var relativeAssignments: [String: UUID] = [:]
+
+        for (path, headingID) in noteAssignments {
+            guard path.hasPrefix(rootPrefix) else {
+                throw NotesOrganizationTransferError.invalidAssignmentPath
+            }
+            relativeAssignments[String(path.dropFirst(rootPrefix.count))] = headingID
+        }
+
+        let export = NotesOrganizationExport(
+            version: 1,
+            headings: headings,
+            noteAssignments: relativeAssignments
+        )
+        return try JSONEncoder().encode(export)
+    }
+
+    func importOrganization(from data: Data) throws {
+        let organization = try JSONDecoder().decode(NotesOrganizationExport.self, from: data)
+        guard organization.version == 1 else {
+            throw NotesOrganizationTransferError.unsupportedVersion
+        }
+
+        let headingIDs = organization.headings.map(\.id)
+        let headingTitles = organization.headings.map {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        guard organization.headings.allSatisfy({
+            !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }),
+        Set(headingIDs).count == headingIDs.count,
+        Set(headingTitles).count == headingTitles.count else {
+            throw NotesOrganizationTransferError.invalidHeadings
+        }
+
+        let validHeadingIDs = Set(headingIDs)
+        var importedAssignments: [String: UUID] = [:]
+        for (relativePath, headingID) in organization.noteAssignments {
+            guard !relativePath.isEmpty,
+                  !relativePath.hasPrefix("/"),
+                  !relativePath.split(separator: "/").contains(".."),
+                  validHeadingIDs.contains(headingID) else {
+                throw NotesOrganizationTransferError.invalidAssignmentPath
+            }
+
+            let noteURL = URL(fileURLWithPath: relativePath, relativeTo: rootURL)
+                .standardizedFileURL
+            let rootPath = rootURL.standardizedFileURL.path
+            let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            guard noteURL.path.hasPrefix(rootPrefix),
+                  noteURL.pathExtension.lowercased() == "md" else {
+                throw NotesOrganizationTransferError.invalidAssignmentPath
+            }
+            importedAssignments[noteKey(for: noteURL)] = headingID
+        }
+
+        let previousHeadings = headings
+        let previousAssignments = noteAssignments
+        headings = organization.headings
+        noteAssignments = importedAssignments
+        do {
+            try saveSidebarMetadata()
+        } catch {
+            headings = previousHeadings
+            noteAssignments = previousAssignments
+            throw error
+        }
+    }
+
+    func createHeading(named proposedTitle: String) {
+        errorMessage = nil
+        let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            errorMessage = "Enter a heading name."
+            return
+        }
+        guard !headings.contains(where: {
+            $0.title.localizedCaseInsensitiveCompare(title) == .orderedSame
+        }) else {
+            errorMessage = "A heading with that name already exists."
+            return
+        }
+
+        let heading = NoteHeading(id: UUID(), title: title)
+        headings.append(heading)
+        do {
+            try saveSidebarMetadata()
+        } catch {
+            headings.removeAll { $0.id == heading.id }
+            errorMessage = "Unable to save the note headings: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteHeading(_ heading: NoteHeading) {
+        let previousHeadings = headings
+        let previousAssignments = noteAssignments
+        headings.removeAll { $0.id == heading.id }
+        noteAssignments = noteAssignments.filter { $0.value != heading.id }
+        do {
+            try saveSidebarMetadata()
+        } catch {
+            headings = previousHeadings
+            noteAssignments = previousAssignments
+            errorMessage = "Unable to save the note headings: \(error.localizedDescription)"
+        }
+    }
+
+    func canMoveHeading(_ headingID: UUID, by offset: Int) -> Bool {
+        guard let index = headings.firstIndex(where: { $0.id == headingID }) else {
+            return false
+        }
+        return headings.indices.contains(index + offset)
+    }
+
+    func moveHeading(_ headingID: UUID, by offset: Int) {
+        guard let index = headings.firstIndex(where: { $0.id == headingID }) else {
+            return
+        }
+        let destination = index + offset
+        guard headings.indices.contains(destination) else { return }
+
+        let previousHeadings = headings
+        headings.swapAt(index, destination)
+        do {
+            try saveSidebarMetadata()
+        } catch {
+            headings = previousHeadings
+            errorMessage = "Unable to save the heading order: \(error.localizedDescription)"
+        }
+    }
+
+    func moveNote(_ url: URL, to headingID: UUID?) {
+        let key = noteKey(for: url)
+        guard allNoteURLs(in: notes).contains(where: { noteKey(for: $0) == key }) else {
+            errorMessage = "The selected note is not in the Notes folder."
+            return
+        }
+        guard headingID == nil || headings.contains(where: { $0.id == headingID }) else {
+            errorMessage = "The selected heading no longer exists."
+            return
+        }
+
+        let previousAssignment = noteAssignments[key]
+        if let headingID {
+            noteAssignments[key] = headingID
+        } else {
+            noteAssignments.removeValue(forKey: key)
+        }
+        do {
+            try saveSidebarMetadata()
+        } catch {
+            noteAssignments[key] = previousAssignment
+            errorMessage = "Unable to save the note organization: \(error.localizedDescription)"
+        }
+    }
+
+    func noteContainsText(at url: URL) -> Bool? {
+        guard allNoteURLs(in: notes).contains(where: { noteKey(for: $0) == noteKey(for: url) }) else {
+            errorMessage = "The selected note is not in the Notes folder."
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            return !data.isEmpty
+        } catch {
+            errorMessage = "Unable to read the note before deleting it: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func deleteNote(at url: URL) {
+        let key = noteKey(for: url)
+        guard allNoteURLs(in: notes).contains(where: { noteKey(for: $0) == key }) else {
+            errorMessage = "The selected note is not in the Notes folder."
+            return
+        }
+
+        do {
+            try FileManager.default.removeItem(at: url)
+            noteAssignments.removeValue(forKey: key)
+            if selectedNoteURL == url {
+                selectedNoteURL = nil
+                content = ""
+            }
+            try saveSidebarMetadata()
+            try refreshNotes()
+            if selectedNoteURL == nil, let firstNote = firstNoteURL(in: notes) {
+                selectNote(firstNote)
+            }
+        } catch {
+            errorMessage = "Unable to delete the note: \(error.localizedDescription)"
         }
     }
 
@@ -737,6 +1290,11 @@ final class NotesWorkspaceModel: ObservableObject {
         } catch {
             errorMessage = "Unable to open the note: \(error.localizedDescription)"
         }
+    }
+
+    func clearSelection() {
+        selectedNoteURL = nil
+        content = ""
     }
 
     func saveCurrentNote() {
@@ -778,6 +1336,10 @@ final class NotesWorkspaceModel: ObservableObject {
             if selectedNoteURL == url {
                 selectedNoteURL = newURL
             }
+            if let assignment = noteAssignments.removeValue(forKey: noteKey(for: url)) {
+                noteAssignments[noteKey(for: newURL)] = assignment
+                try saveSidebarMetadata()
+            }
             try refreshNotes()
         } catch {
             errorMessage = "Unable to rename the note: \(error.localizedDescription)"
@@ -786,6 +1348,70 @@ final class NotesWorkspaceModel: ObservableObject {
 
     private func refreshNotes() throws {
         notes = try treeItems(in: rootURL)
+        let validKeys = Set(allNoteURLs(in: notes).map(noteKey(for:)))
+        let validHeadingIDs = Set(headings.map(\.id))
+        let previousAssignments = noteAssignments
+        noteAssignments = noteAssignments.filter {
+            validKeys.contains($0.key) && validHeadingIDs.contains($0.value)
+        }
+        if noteAssignments != previousAssignments {
+            try saveSidebarMetadata()
+        }
+    }
+
+    private func loadSidebarMetadata() {
+        guard !hasLoadedSidebarMetadata else { return }
+        hasLoadedSidebarMetadata = true
+        guard let data = UserDefaults.standard.data(forKey: sidebarMetadataKey) else { return }
+
+        do {
+            let metadata = try JSONDecoder().decode(NotesSidebarMetadata.self, from: data)
+            headings = metadata.headings
+            noteAssignments = metadata.noteAssignments
+        } catch {
+            errorMessage = "Unable to load note organization: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveSidebarMetadata() throws {
+        let metadata = NotesSidebarMetadata(
+            headings: headings,
+            noteAssignments: noteAssignments
+        )
+        let data = try JSONEncoder().encode(metadata)
+        UserDefaults.standard.set(data, forKey: sidebarMetadataKey)
+    }
+
+    private func noteKey(for url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    private func allNoteURLs(in items: [NoteTreeItem]) -> [URL] {
+        items.flatMap { item in
+            if item.isDirectory {
+                return allNoteURLs(in: item.children ?? [])
+            }
+            return [item.url]
+        }
+    }
+
+    private func filteredTree(_ items: [NoteTreeItem], headingID: UUID?) -> [NoteTreeItem] {
+        items.compactMap { item in
+            if item.isDirectory {
+                let children = filteredTree(item.children ?? [], headingID: headingID)
+                guard !children.isEmpty else { return nil }
+                return NoteTreeItem(
+                    url: item.url,
+                    name: item.name,
+                    isDirectory: true,
+                    children: children
+                )
+            }
+
+            let assignedHeading = noteAssignments[noteKey(for: item.url)]
+            guard assignedHeading == headingID else { return nil }
+            return item
+        }
     }
 
     private func treeItems(in directory: URL) throws -> [NoteTreeItem] {
@@ -842,6 +1468,142 @@ final class NotesWorkspaceModel: ObservableObject {
     }
 }
 
+private struct NoteTreeRow: View {
+    let item: NoteTreeItem
+    let isSelected: Bool
+    let colors: ThemeColors
+    let headings: [NoteHeading]
+    let currentHeadingID: UUID?
+    let onSelect: () -> Void
+    let onRename: () -> Void
+    let onDelete: () -> Void
+    let onMove: (UUID?) -> Void
+
+    private var rowContent: some View {
+        HStack(spacing: 6) {
+            Image(systemName: item.isDirectory ? "folder" : "doc.text")
+                .foregroundColor(colors.tabText)
+            Text(item.name)
+                .lineLimit(1)
+                .foregroundColor(colors.tabText)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if item.isDirectory {
+                rowContent
+            } else {
+                rowContent
+                    .onDrag {
+                        NSItemProvider(object: item.url as NSURL)
+                    }
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .listRowBackground(colors.tabBackground)
+        .background(isSelected ? colors.tabSelected.opacity(0.18) : Color.clear)
+        .onTapGesture {
+            if !item.isDirectory {
+                onSelect()
+            }
+        }
+        .contextMenu {
+            if !item.isDirectory {
+                Button("Rename…", systemImage: "pencil", action: onRename)
+                Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+                Menu("Move to") {
+                    Button {
+                        onMove(nil)
+                    } label: {
+                        if currentHeadingID == nil {
+                            Label("Unsorted", systemImage: "checkmark")
+                        } else {
+                            Text("Unsorted")
+                        }
+                    }
+
+                    if !headings.isEmpty {
+                        Divider()
+                    }
+
+                    ForEach(headings) { heading in
+                        Button {
+                            onMove(heading.id)
+                        } label: {
+                            if currentHeadingID == heading.id {
+                                Label(heading.title, systemImage: "checkmark")
+                            } else {
+                                Text(heading.title)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct NoteFormattingToolbar: View {
+    let colors: ThemeColors
+    let formatting: NoteEditorFormatting
+    let onLink: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            formatButton("bold", help: "Bold (⌘B)", shortcut: "b") {
+                formatting.perform(.bold)
+            }
+            formatButton("italic", help: "Italic (⌘I)", shortcut: "i") {
+                formatting.perform(.italic)
+            }
+            formatButton("textformat.size", help: "Add Title") {
+                formatting.perform(.title)
+            }
+            formatButton("line.3.horizontal", help: "Insert Separator") {
+                formatting.perform(.separator)
+            }
+            formatButton("checklist", help: "Insert Checklist Item") {
+                formatting.perform(.checklist)
+            }
+            formatButton("text.quote", help: "Insert Quote") {
+                formatting.perform(.quote)
+            }
+            formatButton("link", help: "Insert Hyperlink", action: onLink)
+            Spacer()
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private func formatButton(
+        _ symbol: String,
+        help: String,
+        shortcut: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .foregroundColor(colors.text)
+        }
+        .help(help)
+        .applyShortcut(shortcut)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func applyShortcut(_ shortcut: String?) -> some View {
+        if let character = shortcut?.first {
+            self.keyboardShortcut(KeyEquivalent(character), modifiers: .command)
+        } else {
+            self
+        }
+    }
+}
+
 struct NoteView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @ObservedObject var model: NotesWorkspaceModel
@@ -849,7 +1611,20 @@ struct NoteView: View {
     @State private var renameTargetURL: URL?
     @State private var renameText = ""
     @State private var isRenamePresented = false
+    @State private var deleteTargetURL: URL?
+    @State private var isDeleteConfirmationPresented = false
+    @State private var headingTitle = ""
+    @State private var isHeadingPresented = false
+    @State private var targetedHeadingID: UUID?
+    @State private var collapsedHeadingIDs = Set<UUID>()
+    @State private var openNoteURLs: [URL] = []
+    @State private var isSidebarVisible = true
+    @State private var isSearchPresented = false
+    @State private var searchText = ""
+    @State private var isLinkPresented = false
+    @State private var linkURL = ""
     @State private var isEditing = false
+    @State private var showsFormattingTools = false
 
     private var separatorColor: Color {
         themeManager.currentTheme == .light
@@ -859,176 +1634,29 @@ struct NoteView: View {
 
     var body: some View {
         HSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Notes")
-                        .font(.headline)
-                        .foregroundColor(themeManager.colors.text)
-                    Spacer()
-                    Button(action: model.createNote) {
-                        Image(systemName: "plus")
-                            .foregroundColor(themeManager.colors.text)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Create Note")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-
-                Rectangle()
-                    .fill(separatorColor)
-                    .frame(height: 1)
-
-                List {
-                    OutlineGroup(model.notes, children: \.children) { item in
-                        HStack(spacing: 6) {
-                            Image(systemName: item.isDirectory ? "folder" : "doc.text")
-                                .foregroundColor(themeManager.colors.tabText)
-                            Text(item.name)
-                                .lineLimit(1)
-                                .foregroundColor(themeManager.colors.tabText)
-                        }
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
-                        .listRowBackground(themeManager.colors.tabBackground)
-                        .background(
-                            model.selectedNoteURL == item.url
-                                ? themeManager.colors.tabSelected.opacity(0.18)
-                                : Color.clear
-                        )
-                        .onTapGesture {
-                            if !item.isDirectory {
-                                model.selectNote(item.url)
-                            }
-                        }
-                        .contextMenu {
-                            if !item.isDirectory {
-                                Button("Rename…", systemImage: "pencil") {
-                                    beginRenaming(item.url)
-                                }
-                            }
-                        }
-                    }
-                }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-                .background(themeManager.colors.tabBackground)
-                .environment(
-                    \.colorScheme,
-                    themeManager.currentTheme == .light ? .light : .dark
-                )
+            if isSidebarVisible {
+                sidebar
             }
-            .frame(minWidth: 170, idealWidth: 220, maxWidth: 300)
-            .background(themeManager.colors.tabBackground)
-            .overlay(alignment: .trailing) {
-                Rectangle()
-                    .fill(separatorColor)
-                    .frame(width: 1)
-            }
-
-            Group {
-                if let selectedNoteURL = model.selectedNoteURL {
-                    VStack(spacing: 0) {
-                        HStack {
-                            Text(selectedNoteURL.deletingPathExtension().lastPathComponent)
-                                .font(.headline)
-                            Spacer()
-                            Button {
-                                beginRenaming(selectedNoteURL)
-                            } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Rename Note")
-
-                            Button(isEditing ? "Preview" : "Edit") {
-                                isEditing.toggle()
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-
-                        Rectangle()
-                            .fill(separatorColor)
-                            .frame(height: 1)
-
-                        HStack(spacing: 12) {
-                            Button {
-                                formatting.perform(.bold)
-                            } label: {
-                                Image(systemName: "bold")
-                                    .foregroundColor(themeManager.colors.text)
-                            }
-                            .keyboardShortcut("b", modifiers: .command)
-                            .help("Bold (⌘B)")
-
-                            Button {
-                                formatting.perform(.italic)
-                            } label: {
-                                Image(systemName: "italic")
-                                    .foregroundColor(themeManager.colors.text)
-                            }
-                            .keyboardShortcut("i", modifiers: .command)
-                            .help("Italic (⌘I)")
-
-                            Button {
-                                formatting.perform(.title)
-                            } label: {
-                                Image(systemName: "textformat.size")
-                                    .foregroundColor(themeManager.colors.text)
-                            }
-                            .help("Add Title")
-
-                            Spacer()
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-
-                        Rectangle()
-                            .fill(separatorColor)
-                            .frame(height: 1)
-
-                        if isEditing {
-                            NoteMarkdownEditor(
-                                text: $model.content,
-                                textColor: themeManager.colors.editorText,
-                                formatting: formatting
-                            )
-                        } else {
-                            NoteMarkdownPreview(
-                                content: $model.content,
-                                textColor: themeManager.colors.editorText,
-                                formatting: formatting
-                            )
-                        }
-                    }
-                } else {
-                    VStack(spacing: 8) {
-                        Image(systemName: "note.text")
-                            .font(.largeTitle)
-                        Text("Create a note or add a Markdown file to the Notes folder.")
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(themeManager.colors.tabText)
-                    }
-                    .padding(24)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
-            .background(themeManager.colors.editorBackground)
-            .onChange(of: model.content) { _, _ in
-                model.saveCurrentNote()
-            }
+            editorPane
         }
         .environment(
             \.colorScheme,
             themeManager.currentTheme == .light ? .light : .dark
         )
-        .onAppear(perform: model.loadWorkspace)
-        .onChange(of: model.selectedNoteURL) { _, _ in
+        .onAppear {
+            model.loadWorkspace()
+            if let selectedNoteURL = model.selectedNoteURL {
+                openNoteURLs = [selectedNoteURL]
+            }
+        }
+        .onChange(of: model.selectedNoteURL) { _, selectedNoteURL in
             isEditing = false
+            showsFormattingTools = false
+            openNoteURLs.removeAll { !FileManager.default.fileExists(atPath: $0.path) }
+            if let selectedNoteURL,
+               !openNoteURLs.contains(where: { $0 == selectedNoteURL }) {
+                openNoteURLs.append(selectedNoteURL)
+            }
         }
         .sheet(isPresented: $isRenamePresented) {
             VStack(alignment: .leading, spacing: 12) {
@@ -1054,6 +1682,54 @@ struct NoteView: View {
             .padding(20)
             .frame(width: 320)
         }
+        .sheet(isPresented: $isHeadingPresented) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("New Heading")
+                    .font(.headline)
+
+                TextField("Heading name", text: $headingTitle)
+                    .onSubmit {
+                        confirmHeading()
+                    }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") {
+                        isHeadingPresented = false
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    Button("Create", action: confirmHeading)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 320)
+        }
+        .sheet(isPresented: $isLinkPresented) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Insert Hyperlink")
+                    .font(.headline)
+
+                TextField("https://example.com", text: $linkURL)
+                    .onSubmit {
+                        confirmLink()
+                    }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") {
+                        isLinkPresented = false
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    Button("Insert", action: confirmLink)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 360)
+        }
         .alert(
             "Notes",
             isPresented: Binding(
@@ -1069,6 +1745,377 @@ struct NoteView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .confirmationDialog(
+            "Delete “\(deleteTargetURL?.deletingPathExtension().lastPathComponent ?? "note")”?",
+            isPresented: $isDeleteConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let deleteTargetURL {
+                    model.deleteNote(at: deleteTargetURL)
+                }
+                self.deleteTargetURL = nil
+            }
+            Button("Cancel", role: .cancel) {
+                deleteTargetURL = nil
+            }
+        } message: {
+            Text("This note contains text. This action cannot be undone.")
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                Text("Notes")
+                    .font(.headline)
+                    .foregroundColor(themeManager.colors.text)
+                Spacer(minLength: 0)
+                sidebarButton("doc.badge.plus", help: "New Note") {
+                    model.createNote()
+                }
+                sidebarButton("folder.badge.plus", help: "New Heading") {
+                    headingTitle = ""
+                    isHeadingPresented = true
+                }
+                sidebarButton(
+                    isSearchPresented ? "xmark" : "magnifyingglass",
+                    help: isSearchPresented ? "Close Search" : "Search Notes"
+                ) {
+                    isSearchPresented.toggle()
+                    if !isSearchPresented {
+                        searchText = ""
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+
+            if isSearchPresented {
+                TextField("Search notes", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+
+            Rectangle()
+                .fill(separatorColor)
+                .frame(height: 1)
+
+            List {
+                if !filteredNotes(in: nil).isEmpty {
+                    Section {
+                        noteRows(in: nil)
+                    } header: {
+                        Text("Unsorted")
+                            .foregroundColor(themeManager.colors.tabText)
+                    }
+                }
+
+                ForEach(model.headings) { heading in
+                    if searchText.isEmpty || !filteredNotes(in: heading.id).isEmpty {
+                        Section {
+                            if !collapsedHeadingIDs.contains(heading.id) {
+                                noteRows(in: heading.id)
+                            }
+                        } header: {
+                            HStack(spacing: 6) {
+                                if !model.notes(inHeading: heading.id).isEmpty {
+                                    Button {
+                                        if collapsedHeadingIDs.contains(heading.id) {
+                                            collapsedHeadingIDs.remove(heading.id)
+                                        } else {
+                                            collapsedHeadingIDs.insert(heading.id)
+                                        }
+                                    } label: {
+                                        Image(
+                                            systemName: collapsedHeadingIDs.contains(heading.id)
+                                                ? "plus"
+                                                : "minus"
+                                        )
+                                        .foregroundColor(themeManager.colors.tabText)
+                                        .frame(width: 14)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(
+                                        collapsedHeadingIDs.contains(heading.id)
+                                            ? "Show notes"
+                                            : "Hide notes"
+                                    )
+                                } else {
+                                    Image(systemName: "folder")
+                                        .foregroundColor(themeManager.colors.tabText)
+                                        .frame(width: 14)
+                                }
+
+                                Text(heading.title)
+                                    .lineLimit(1)
+                                    .foregroundColor(themeManager.colors.tabText)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 3)
+                            .background(
+                                targetedHeadingID == heading.id
+                                    ? themeManager.colors.tabSelected.opacity(0.25)
+                                    : Color.clear
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .contentShape(Rectangle())
+                            .onDrop(
+                                of: [UTType.fileURL],
+                                isTargeted: Binding(
+                                    get: { targetedHeadingID == heading.id },
+                                    set: { targetedHeadingID = $0 ? heading.id : nil }
+                                ),
+                                perform: { handleNoteDrop($0, to: heading.id) }
+                            )
+                            .contextMenu {
+                                Button("Move Up", systemImage: "arrow.up") {
+                                    model.moveHeading(heading.id, by: -1)
+                                }
+                                .disabled(!model.canMoveHeading(heading.id, by: -1))
+
+                                Button("Move Down", systemImage: "arrow.down") {
+                                    model.moveHeading(heading.id, by: 1)
+                                }
+                                .disabled(!model.canMoveHeading(heading.id, by: 1))
+
+                                Divider()
+
+                                Button("Delete Heading", systemImage: "trash", role: .destructive) {
+                                    model.deleteHeading(heading)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(themeManager.colors.tabBackground)
+            .environment(
+                \.colorScheme,
+                themeManager.currentTheme == .light ? .light : .dark
+            )
+        }
+        .frame(minWidth: 190, idealWidth: 250, maxWidth: 340)
+        .background(themeManager.colors.tabBackground)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(separatorColor)
+                .frame(width: 1)
+        }
+    }
+
+    private var editorPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(openNoteURLs, id: \.standardizedFileURL.path) { url in
+                            noteTab(for: url)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+
+                Button(action: model.createNote) {
+                    Image(systemName: "plus")
+                        .foregroundColor(themeManager.colors.tabText)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .help("New Note")
+
+                Spacer(minLength: 0)
+
+                Button {
+                    isSidebarVisible.toggle()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .foregroundColor(themeManager.colors.tabText)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+                .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+
+                if let selectedNoteURL = model.selectedNoteURL {
+                    Button {
+                        showsFormattingTools.toggle()
+                    } label: {
+                        Image(systemName: "textformat")
+                            .foregroundColor(themeManager.colors.tabText)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .help(showsFormattingTools ? "Hide Formatting Tools" : "Show Formatting Tools")
+
+                    Button {
+                        beginRenaming(selectedNoteURL)
+                    } label: {
+                        Image(systemName: "pencil")
+                            .foregroundColor(themeManager.colors.tabText)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .help("Rename Note")
+
+                    Button(isEditing ? "Preview" : "Edit") {
+                        isEditing.toggle()
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.trailing, 12)
+                }
+            }
+            .frame(height: 44)
+            .background(themeManager.colors.tabBackground)
+
+            Rectangle()
+                .fill(separatorColor)
+                .frame(height: 1)
+
+            if isEditing || showsFormattingTools {
+                NoteFormattingToolbar(
+                    colors: themeManager.colors,
+                    formatting: formatting,
+                    onLink: {
+                        linkURL = "https://"
+                        isLinkPresented = true
+                    }
+                )
+
+                Rectangle()
+                    .fill(separatorColor)
+                    .frame(height: 1)
+            }
+
+            Group {
+                if model.selectedNoteURL != nil {
+                    if isEditing {
+                        NoteMarkdownEditor(
+                            text: $model.content,
+                            textColor: themeManager.colors.editorText,
+                            formatting: formatting
+                        )
+                    } else {
+                        NoteMarkdownPreview(
+                            content: $model.content,
+                            textColor: themeManager.colors.editorText,
+                            formatting: formatting
+                        )
+                    }
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "note.text")
+                            .font(.largeTitle)
+                            .foregroundColor(themeManager.colors.tabText)
+                        Text("Select a note or create a new one")
+                            .foregroundColor(themeManager.colors.tabText)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(minWidth: 220, maxWidth: .infinity, maxHeight: .infinity)
+            .background(themeManager.colors.editorBackground)
+            .onChange(of: model.content) { _, _ in
+                model.saveCurrentNote()
+            }
+        }
+        .background(themeManager.colors.editorBackground)
+    }
+
+    private func noteTab(for url: URL) -> some View {
+        let isSelected = model.selectedNoteURL == url
+        return HStack(spacing: 0) {
+            Button {
+                model.selectNote(url)
+            } label: {
+                Text(url.deletingPathExtension().lastPathComponent)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundColor(isSelected ? themeManager.colors.text : themeManager.colors.tabText)
+                    .padding(.leading, 14)
+                    .padding(.trailing, 8)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                closeNoteTab(url)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(themeManager.colors.tabText)
+                    .padding(.trailing, 12)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .help("Close Note")
+        }
+        .frame(minWidth: 130, maxWidth: 210)
+        .background(isSelected ? themeManager.colors.editorBackground : Color.clear)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(separatorColor)
+                .frame(width: 1)
+        }
+    }
+
+    private func sidebarButton(
+        _ symbol: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .foregroundColor(themeManager.colors.tabText)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func openNote(_ url: URL) {
+        model.selectNote(url)
+        if !openNoteURLs.contains(where: { $0 == url }) {
+            openNoteURLs.append(url)
+        }
+    }
+
+    private func closeNoteTab(_ url: URL) {
+        guard let index = openNoteURLs.firstIndex(of: url) else { return }
+        let wasSelected = model.selectedNoteURL == url
+        openNoteURLs.remove(at: index)
+        guard wasSelected else { return }
+
+        if openNoteURLs.isEmpty {
+            model.clearSelection()
+        } else {
+            model.selectNote(openNoteURLs[min(index, openNoteURLs.count - 1)])
+        }
+    }
+
+    private func filteredNotes(in headingID: UUID?) -> [NoteTreeItem] {
+        let items = model.notes(inHeading: headingID)
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return items }
+        return filterTree(items, matching: query)
+    }
+
+    private func filterTree(_ items: [NoteTreeItem], matching query: String) -> [NoteTreeItem] {
+        items.compactMap { item in
+            if item.isDirectory {
+                let children = filterTree(item.children ?? [], matching: query)
+                guard !children.isEmpty else { return nil }
+                return NoteTreeItem(
+                    url: item.url,
+                    name: item.name,
+                    isDirectory: true,
+                    children: children
+                )
+            }
+            return item.name.localizedCaseInsensitiveContains(query) ? item : nil
+        }
     }
 
     private func beginRenaming(_ url: URL) {
@@ -1081,5 +2128,71 @@ struct NoteView: View {
         guard let renameTargetURL else { return }
         model.renameNote(at: renameTargetURL, to: renameText)
         isRenamePresented = false
+    }
+
+    private func requestDelete(_ url: URL) {
+        guard let containsText = model.noteContainsText(at: url) else { return }
+        if containsText {
+            deleteTargetURL = url
+            isDeleteConfirmationPresented = true
+        } else {
+            model.deleteNote(at: url)
+        }
+    }
+
+    private func confirmLink() {
+        let destination = linkURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty else { return }
+        formatting.perform(.link(url: destination))
+        isLinkPresented = false
+    }
+
+    private func handleNoteDrop(_ providers: [NSItemProvider], to headingID: UUID) -> Bool {
+        let fileURLType = UTType.fileURL.identifier
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(fileURLType)
+        }) else {
+            return false
+        }
+
+        provider.loadItem(forTypeIdentifier: fileURLType, options: nil) { item, error in
+            let url = (item as? URL) ?? (item as? Data).flatMap {
+                URL(dataRepresentation: $0, relativeTo: nil)
+            }
+            Task { @MainActor in
+                if let error {
+                    model.errorMessage = "Unable to read the dropped note: \(error.localizedDescription)"
+                } else if let url {
+                    model.moveNote(url, to: headingID)
+                } else {
+                    model.errorMessage = "Unable to read the dropped note URL."
+                }
+            }
+        }
+        return true
+    }
+
+    @ViewBuilder
+    private func noteRows(in headingID: UUID?) -> some View {
+        OutlineGroup(filteredNotes(in: headingID), children: \.children) { item in
+            NoteTreeRow(
+                item: item,
+                isSelected: model.selectedNoteURL == item.url,
+                colors: themeManager.colors,
+                headings: model.headings,
+                currentHeadingID: model.noteAssignments[item.url.standardizedFileURL.path],
+                onSelect: { openNote(item.url) },
+                onRename: { beginRenaming(item.url) },
+                onDelete: { requestDelete(item.url) },
+                onMove: { model.moveNote(item.url, to: $0) }
+            )
+        }
+    }
+
+    private func confirmHeading() {
+        model.createHeading(named: headingTitle)
+        if model.errorMessage == nil {
+            isHeadingPresented = false
+        }
     }
 }

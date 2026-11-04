@@ -1,9 +1,9 @@
-# SimpleNotepad
+# LightNote+
 
-A lightweight macOS text editor built with SwiftUI. SimpleNotepad provides a
+A lightweight macOS text editor built with SwiftUI. LightNote+ provides a
 tabbed editing workspace for plain-text and source files. 
 
-> **Note:** SimpleNotepad is still under development. Features and
+> **Note:** LightNote+ is still under development. Features and
 > behavior may change. The app only supports macOS. 
 
 Designed to be a simple notepad, the app has no update checks, cloud sync, or
@@ -30,6 +30,8 @@ other online features. App won't ask you update or show popup windows to user. I
 - Find and replace function 
 - Indent selected lines by four spaces
 - Register `.txt`, `.css`, and `.html` as supported document types
+- Create and organize Markdown notes in the Notes view using app-only headings;
+  drag notes onto headings to organize them without moving their files on disk
 
 ## Keyboard shortcuts
 
