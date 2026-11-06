@@ -14,7 +14,8 @@ struct ContentView: View {
     @EnvironmentObject var tabManager: TabManager
     @EnvironmentObject private var notesWorkspace: NotesWorkspaceModel
     @State private var isTargeted = false
-    @State private var showsNotesView = false
+    @State private var showsNotesView =
+        UserDefaults.standard.string(forKey: "defaultOpeningView") == AppOpeningView.notes.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
@@ -180,6 +181,13 @@ struct ToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Toggle Theme")
+
+            SettingsLink {
+                Image(systemName: "gearshape")
+                    .foregroundColor(themeManager.colors.text)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
         }
         .padding(8)
         .background(themeManager.colors.tabBackground)
@@ -262,6 +270,7 @@ private struct HighlightedSyntaxEditor: NSViewRepresentable {
         textView.allowsUndo = true
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
+        textView.layoutManager?.allowsNonContiguousLayout = false
         textView.autoresizingMask = [.width]
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
@@ -311,6 +320,47 @@ private struct HighlightedSyntaxEditor: NSViewRepresentable {
         }
 
         guard !textView.attributedString().isEqual(to: formattedText) else { return }
+
+        guard textView.string != formattedText.string else {
+            guard let textStorage = textView.textStorage, formattedText.length > 0 else { return }
+
+            textStorage.beginEditing()
+            formattedText.enumerateAttributes(
+                in: NSRange(location: 0, length: formattedText.length)
+            ) { attributes, range, _ in
+                var location = range.location
+                let rangeEnd = NSMaxRange(range)
+
+                while location < rangeEnd {
+                    var currentRange = NSRange()
+                    let currentAttributes = textStorage.attributes(
+                        at: location,
+                        effectiveRange: &currentRange
+                    )
+                    let updateEnd = min(rangeEnd, NSMaxRange(currentRange))
+                    var changedAttributes: [NSAttributedString.Key: Any] = [:]
+
+                    for key in [NSAttributedString.Key.font, .foregroundColor] {
+                        let currentValue = currentAttributes[key] as? NSObject
+                        let formattedValue = attributes[key] as? NSObject
+                        guard currentValue?.isEqual(formattedValue) != true else { continue }
+                        if let formattedValue = attributes[key] {
+                            changedAttributes[key] = formattedValue
+                        }
+                    }
+
+                    if !changedAttributes.isEmpty {
+                        textStorage.addAttributes(
+                            changedAttributes,
+                            range: NSRange(location: location, length: updateEnd - location)
+                        )
+                    }
+                    location = updateEnd
+                }
+            }
+            textStorage.endEditing()
+            return
+        }
 
         let selection = textView.selectedRange()
         let location = min(selection.location, formattedText.length)

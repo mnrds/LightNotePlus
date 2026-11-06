@@ -1,37 +1,56 @@
 # LightNote+
 
-A lightweight macOS text editor built with SwiftUI. LightNote+ provides a
-tabbed editing workspace for plain-text and source files. 
+LightNote+ is a lightweight macOS app that combines a plain-text editor with a
+Markdown notes workspace. Switch between the two views from the toolbar, and
+choose which view opens by default in Settings.
 
-> **Note:** LightNote+ is still under development. Features and
-> behavior may change. The app only supports macOS. 
+The app is inspired by the simplicity of Apple Notes and the Markdown workflow
+of Obsidian. This is a side project currently under development, so features
+and functionality may change.
 
-Designed to be a simple notepad, the app has no update checks, cloud sync, or
-other online features. App won't ask you update or show popup windows to user. It's free to use. 
+## Download
 
-## Download for macOS 
+**Latest release:** 1.1
+[Download LightNote+ for macOS](https://mnrds.org/light-note-plus/).
 
-**Latest release:** 1.0  
-[Download the latest release](https://mnrds.org/light-note-plus/).
+>If macOS does not allow you to open the app, go to **System Settings → Privacy
+>& Security** and click **Open Anyway**.
 
 ## Features
 
-- No update checks or popup windows, no cloud sync, or online features—just a notepad
-- Minimalistic look: Switch between light and dark themes
-- Open and edit multiple files in tabs
-- Open files through the File menu or by dragging them into the app
-- Save and Save As
-- Confirm before closing a tab with unsaved changes
-- Automatically save modified files after 30 seconds without further edits
-- Restore tabs and their contents from the previous session
-- Choose UTF-8, UTF-16, UTF-16 LE, or UTF-16 BE encoding
-- Show word and character counts in the editor status bar
-- Zoom the editor text in and out 
-- Find and replace function 
-- Indent selected lines by four spaces
-- Register `.txt`, `.css`, and `.html` as supported document types
-- Create and organize Markdown notes in the Notes view using app-only headings;
-  drag notes onto headings to organize them without moving their files on disk
+### Text editor
+
+- Edit multiple files in tabs; open files from the File menu or by dragging them
+  into the app
+- Save and Save As, with a prompt before closing tabs that have unsaved changes
+- Automatically save changes to files after 30 seconds without further edits
+- Restore tabs and the selected tab from the previous session
+- Read and write UTF-8, UTF-16, UTF-16 LE, and UTF-16 BE files
+- Syntax highlighting for CSS and HTML
+- Show line numbers, word count, and character count
+- Find text, indent selected lines, and zoom the editor text
+
+### Markdown notes
+
+- Privacy first: App works totally offline. Note files are saved locally on your computer or you can choose network drive 
+- Write and preview Markdown in an editable preview, with formatting tools for
+  bold, italic, headings, checklists, quotes, separators, and links
+- Organize notes under app-only headings without moving files on disk
+- Create and rename notes and headings, move notes between headings, and
+  collapse heading contents
+- Search note names, heading names, and note contents
+- Keep multiple notes open in tabs
+- View word and character counts
+- Choose a custom notes folder in Settings
+- Export and import heading organization, including heading order and note
+  assignments; note files themselves are not included
+
+### App settings
+
+- Choose light or dark appearance
+- Select the default opening view
+- Choose the folder used for Markdown notes
+- Export or import notes organization
 
 ## Keyboard shortcuts
 
@@ -45,37 +64,17 @@ other online features. App won't ask you update or show popup windows to user. I
 | Zoom In | `⌘+` |
 | Zoom Out | `⌘-` |
 | Actual Size | `⌘0` |
+| Bold in Notes | `⌘B` |
+| Italic in Notes | `⌘I` |
 
-Zoom shortcuts use the keys that produce `+` and `-` in the active keyboard
+Zoom shortcuts use the keys that produce `+` and `-` on the active keyboard
 layout.
 
-## File encodings
+## Requirements and building
 
-The editor defaults to UTF-8 and detects UTF-8/UTF-16 byte-order marks when
-opening files. It also attempts to recognize BOM-less UTF-16. The encoding
-selector is shown at the bottom of the editor. Changing the selection marks
-the current tab as edited; saving then writes the file using that encoding.
+- macOS 26.0 or newer (the version declared by the app)
+- Xcode and a macOS development environment to build from source
 
-## Session restore
-
-The app stores the current tabs and selected tab when it quits. On the next
-launch, **Session Restore** can recover that state. It is disabled after
-editing content, creating a tab, or opening a file in the current launch.
-
-## Current limitations
-
-- Syntax highlighting is not implemented yet; the editor currently displays
-  plain text.
-- The native Find navigator requires macOS 26 or later.
-- Autosave applies only to tabs associated with a file. Untitled tabs are not
-  autosaved.
-- The repository currently has no Xcode project, workspace, or Swift package
-  manifest, so a fresh clone does not include a buildable project
-  configuration.
-
-## Requirements
-
-- macOS 26.6 or newer - Tested on macOS 27.0.1 
-- Building requires Xcode and a macOS development environment. The repository
-  needs an Xcode project configuration before it can be built from a fresh
-  clone.
+This repository currently does not include an Xcode project or workspace, or a
+Swift package manifest. A fresh clone therefore does not yet include the
+project configuration needed to build the app directly.

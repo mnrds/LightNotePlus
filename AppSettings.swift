@@ -6,6 +6,21 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
+
+enum AppOpeningView: String, CaseIterable, Identifiable {
+    case textEditor
+    case notes
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .textEditor: "Text Editor"
+        case .notes: "NoteView"
+        }
+    }
+}
 
 private struct NotesOrganizationDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }
@@ -31,6 +46,7 @@ private struct NotesOrganizationDocument: FileDocument {
 struct AppSettings: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var notesWorkspace: NotesWorkspaceModel
+    @AppStorage("defaultOpeningView") private var defaultOpeningView = AppOpeningView.textEditor.rawValue
     @State private var exportDocument: NotesOrganizationDocument?
     @State private var isExportPresented = false
     @State private var isImportPresented = false
@@ -52,6 +68,33 @@ struct AppSettings: View {
                     }
                 }
                 .pickerStyle(.segmented)
+            }
+
+            Section("Startup") {
+                Picker("Open at launch", selection: $defaultOpeningView) {
+                    ForEach(AppOpeningView.allCases) { openingView in
+                        Text(openingView.title)
+                            .tag(openingView.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section("Notes folder") {
+                Text(notesWorkspace.rootURL.path)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+
+                HStack {
+                    Button("Choose Folder…", systemImage: "folder") {
+                        chooseNotesFolder()
+                    }
+                    Button("Reset to Default") {
+                        resetNotesFolder()
+                    }
+                }
             }
 
             Section("Notes organization") {
@@ -131,6 +174,39 @@ struct AppSettings: View {
             isExportPresented = true
         } catch {
             errorMessage = "Unable to export note organization: \(error.localizedDescription)"
+        }
+    }
+
+    private func chooseNotesFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Notes Folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = notesWorkspace.rootURL
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try notesWorkspace.setNotesFolder(url)
+                if let workspaceError = notesWorkspace.errorMessage {
+                    errorMessage = workspaceError
+                }
+            } catch {
+                errorMessage = "Unable to change the Notes folder: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func resetNotesFolder() {
+        do {
+            try notesWorkspace.resetNotesFolder()
+            if let workspaceError = notesWorkspace.errorMessage {
+                errorMessage = workspaceError
+            }
+        } catch {
+            errorMessage = "Unable to reset the Notes folder: \(error.localizedDescription)"
         }
     }
 
