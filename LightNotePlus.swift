@@ -1,20 +1,32 @@
 //
 //  LightNotePlus.swift
-//  
+//  App entry point, menu commands, and shared find/zoom state.
 //
-//  Created by mnrds 
-//
-//  LightNote+/
-//  ├── LightNote+/                  # Source files
-//  │   ├── AppDelegate.swift           # App entry point//
-//  │   ├── ContentView.swift           # Main Text-editor view with toolbar, tabs, and editor
-//  │   ├── NoteView.swift              # Notes view with file tree and note editor
-//  │   ├── ThemeManager.swift          # Dark/light theme management
-//  │   ├── TabManager.swift            # Tab system for multiple files
-//  │   ├── SyntaxHighlighter.swift     # Syntax highlighting (framework)
-//  │   ├── AppSettings.swift.swift     # App settings management
-//  │   └── Info.plist                  # App configuration
-//  └── LightNotePlus.xcodeproj/        # Xcode project files
+//  LightNotePlus/
+//  ├── LightNote+/                              # Source files
+//  │   ├── LightNotePlus.swift                     # App entry point, commands, FindState, ZoomState
+//  │   ├── TextEditor.swift                        # ContentView: text editor with toolbar, tabs, and editor
+//  │   ├── TabManager.swift                        # Tab system for multiple files
+//  │   ├── SyntaxHighlighter.swift                 # Syntax highlighting (framework)
+//  │   ├── ThemeManager.swift                      # Dark/light theme management
+//  │   ├── AppSettings.swift                       # App settings (theme, notes font size, notes folder)
+//  │   ├── NoteView/                               # Notes side of the app
+//  │   │   ├── NoteView.swift                         # Main Notes view: layout, toolbar, sheets
+//  │   │   ├── NoteTabBar.swift                       # Open note tabs
+//  │   │   ├── NoteSidebar.swift                      # Sidebar: headings, note tree, search
+//  │   │   ├── NoteEditorPane.swift                   # Formatting toolbar, editor/preview layout, status bar
+//  │   │   ├── NoteMarkdownEditor.swift               # Markdown text editor
+//  │   │   ├── NoteMarkdownPreview.swift              # Rendered Markdown preview
+//  │   │   ├── NoteMarkdownPreviewCoordinator.swift   # Preview interaction and Markdown write-back
+//  │   │   ├── NoteMarkdownRendering.swift            # Markdown <-> attributed text conversion
+//  │   │   ├── NotePreviewTextView.swift              # Preview text view and Markdown blocks
+//  │   │   ├── NoteFormatting.swift                   # Formatting requests and shared helpers
+//  │   │   ├── NoteDocument.swift                     # Open note text, word counts, search index
+//  │   │   ├── NotesWorkspaceModel.swift              # Notes folder, organization, saving
+//  │   │   └── NoteSearch.swift                       # Find in note (⌘F)
+//  │   ├── Assets.xcassets/                        # App icon and colors
+//  │   └── info.plist                              # App configuration
+//  └── light-note-plus.xcodeproj/               # Xcode project files
 //
 // Created by mnrds
 //

@@ -22,6 +22,20 @@ enum AppOpeningView: String, CaseIterable, Identifiable {
     }
 }
 
+// Font size for the Notes editor and preview, combined with View > Zoom.
+enum NoteEditorSettings {
+    static let fontSizeKey = "notesFontSize"
+    static let defaultFontSize: Double = 14
+    static let fontSizeRange: ClosedRange<Double> = 10...28
+    /// ZoomState's "Actual Size" font size.
+    static let actualSizeZoom: CGFloat = 12
+
+    static func scale(fontSize: Double, zoom: CGFloat) -> CGFloat {
+        let clampedSize = min(max(fontSize, fontSizeRange.lowerBound), fontSizeRange.upperBound)
+        return CGFloat(clampedSize / defaultFontSize) * (zoom / actualSizeZoom)
+    }
+}
+
 private struct NotesOrganizationDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }
 
@@ -47,6 +61,8 @@ struct AppSettings: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var notesWorkspace: NotesWorkspaceModel
     @AppStorage("defaultOpeningView") private var defaultOpeningView = AppOpeningView.textEditor.rawValue
+    @AppStorage(NoteEditorSettings.fontSizeKey) private var notesFontSize = NoteEditorSettings.defaultFontSize
+    @State private var importFolderMismatch: String?
     @State private var exportDocument: NotesOrganizationDocument?
     @State private var isExportPresented = false
     @State private var isImportPresented = false
@@ -68,6 +84,13 @@ struct AppSettings: View {
                     }
                 }
                 .pickerStyle(.segmented)
+
+                Stepper(
+                    "Notes font size: \(Int(notesFontSize)) pt",
+                    value: $notesFontSize,
+                    in: NoteEditorSettings.fontSizeRange,
+                    step: 1
+                )
             }
 
             Section("Startup") {
@@ -97,8 +120,8 @@ struct AppSettings: View {
                 }
             }
 
-            Section("Notes organization") {
-                Text("Export or import note headings, their order, and note assignments. Note files are not included.")
+            Section("Notes settings") {
+                Text("Export includes the Notes folder location (relative to your home folder), headings, note assignments, and note order. Note files and folder contents are not included. If the saved folder differs from the current one, import asks you to choose a Notes folder; its files are not changed.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -114,11 +137,12 @@ struct AppSettings: View {
 
             Section("About") {
                 LabeledContent("Application version", value: appVersion)
-                Text("Thank you for using my app LightNote+. Visit my website for more mnrds.org")
+                Text("Thank you for using my app LightNote+. Visit my website for more")
                     .foregroundStyle(.secondary)
-                Text("Created by mnrds")
-                    .font(.callout)
+                Link("https://mnrds.org", destination: URL(string: "https://mnrds.org")!)
+                Text("For App updates check out:")
                     .foregroundStyle(.secondary)
+                Link("LightNote+ website", destination: URL(string: "https://mnrds.org/light-note-plus/")!)
             }
         }
         .formStyle(.grouped)
@@ -128,7 +152,7 @@ struct AppSettings: View {
             isPresented: $isExportPresented,
             document: exportDocument,
             contentType: .json,
-            defaultFilename: "LightNotePlus-Notes-Organization"
+            defaultFilename: "LightNotePlus-Notes-Settings"
         ) { result in
             if case .failure(let error) = result {
                 errorMessage = "Unable to export note organization: \(error.localizedDescription)"
@@ -142,7 +166,7 @@ struct AppSettings: View {
             onCompletion: handleImportSelection
         )
         .confirmationDialog(
-            "Import notes organization?",
+            "Import Notes settings?",
             isPresented: $isImportConfirmationPresented,
             titleVisibility: .visible
         ) {
@@ -153,7 +177,30 @@ struct AppSettings: View {
                 pendingImportData = nil
             }
         } message: {
-            Text("This replaces the current headings, order, and note assignments. Note files will not be changed.")
+            Text("This replaces the current headings, order, and note assignments in the selected Notes folder. Note files will not be changed.")
+        }
+        .confirmationDialog(
+            "Notes folder differs",
+            isPresented: Binding(
+                get: { importFolderMismatch != nil },
+                set: { if !$0 { importFolderMismatch = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Choose Folder…") {
+                importFolderMismatch = nil
+                chooseNotesFolder { isImportConfirmationPresented = true }
+            }
+            Button("Use Current Folder") {
+                importFolderMismatch = nil
+                isImportConfirmationPresented = true
+            }
+            Button("Cancel", role: .cancel) {
+                importFolderMismatch = nil
+                pendingImportData = nil
+            }
+        } message: {
+            Text("These settings were exported from “\(importFolderMismatch ?? "")”. Choose that Notes folder, or apply them to the current one.")
         }
         .alert(
             "Settings",
@@ -177,7 +224,7 @@ struct AppSettings: View {
         }
     }
 
-    private func chooseNotesFolder() {
+    private func chooseNotesFolder(onChosen: (() -> Void)? = nil) {
         let panel = NSOpenPanel()
         panel.title = "Choose Notes Folder"
         panel.prompt = "Choose"
@@ -187,12 +234,18 @@ struct AppSettings: View {
         panel.directoryURL = notesWorkspace.rootURL
 
         panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
+            guard response == .OK, let url = panel.url else {
+                if onChosen != nil {
+                    pendingImportData = nil
+                }
+                return
+            }
             do {
                 try notesWorkspace.setNotesFolder(url)
                 if let workspaceError = notesWorkspace.errorMessage {
                     errorMessage = workspaceError
                 }
+                onChosen?()
             } catch {
                 errorMessage = "Unable to change the Notes folder: \(error.localizedDescription)"
             }
@@ -222,8 +275,13 @@ struct AppSettings: View {
             }
 
             do {
-                pendingImportData = try Data(contentsOf: url)
-                isImportConfirmationPresented = true
+                let data = try Data(contentsOf: url)
+                pendingImportData = data
+                if let savedFolder = notesWorkspace.exportedNotesFolderMismatch(in: data) {
+                    importFolderMismatch = savedFolder
+                } else {
+                    isImportConfirmationPresented = true
+                }
             } catch {
                 errorMessage = "Unable to read note organization file: \(error.localizedDescription)"
             }

@@ -33,7 +33,11 @@ final class ThemeManager: ObservableObject {
     }
 
     var colors: ThemeColors {
-        switch currentTheme {
+        Self.colors(for: currentTheme)
+    }
+
+    static func colors(for theme: Theme) -> ThemeColors {
+        switch theme {
         case .light:
             return ThemeColors(
                 background: .white,
@@ -44,7 +48,11 @@ final class ThemeManager: ObservableObject {
                 editorBackground: .white,
                 editorText: .black,
                 lineNumbers: Color(white: 0.7),
-                selection: Color.blue.opacity(0.3)
+                selection: Color.blue.opacity(0.3),
+                syntaxKeyword: .blue,
+                syntaxString: .red,
+                syntaxComment: Color(red: 0.0, green: 0.42, blue: 0.12),
+                syntaxNumber: .purple
             )
         case .dark:
             return ThemeColors(
@@ -56,7 +64,11 @@ final class ThemeManager: ObservableObject {
                 editorBackground: Color(red: 0.1, green: 0.1, blue: 0.12),
                 editorText: .white,
                 lineNumbers: Color(white: 0.4),
-                selection: Color.blue.opacity(0.4)
+                selection: Color.blue.opacity(0.4),
+                syntaxKeyword: .cyan,
+                syntaxString: .orange,
+                syntaxComment: Color(red: 0.45, green: 0.78, blue: 0.48),
+                syntaxNumber: .purple
             )
         }
     }
@@ -72,4 +84,8 @@ struct ThemeColors {
     let editorText: Color
     let lineNumbers: Color
     let selection: Color
+    let syntaxKeyword: Color
+    let syntaxString: Color
+    let syntaxComment: Color
+    let syntaxNumber: Color
 }
